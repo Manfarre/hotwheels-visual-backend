@@ -1,6 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from PIL import Image
+from PIL import Image, ImageStat
 from bs4 import BeautifulSoup
 from difflib import SequenceMatcher
 import requests
@@ -21,10 +21,11 @@ CLASSICS_URL = "https://hotwheels.fandom.com/wiki/Classics"
 
 session = requests.Session()
 session.headers.update({
-    "User-Agent": "HotWheelsScanner/0.2 (Render Classics Table Parser)"
+    "User-Agent": "HotWheelsScanner/0.3 (Render OCR + visual wiki matcher)"
 })
 
 _cache_rows = None
+_image_cache = {}
 
 
 def normalize_text(text: str) -> str:
@@ -201,7 +202,7 @@ def compare_row_to_ocr(row: dict, ocr_text: str) -> dict:
 
     return {
         "row": row,
-        "score": round(score, 3),
+        "ocrScore": round(score, 3),
         "matchedFields": matched,
     }
 
@@ -216,11 +217,84 @@ def classify_rarity(row: dict) -> str:
     return "Media"
 
 
+def load_remote_image(url: str):
+    if not url:
+        return None
+    if url in _image_cache:
+        return _image_cache[url]
+
+    try:
+        r = session.get(url, timeout=20)
+        r.raise_for_status()
+        img = Image.open(io.BytesIO(r.content)).convert("RGB")
+        _image_cache[url] = img
+        return img
+    except Exception:
+        return None
+
+
+def average_rgb(img: Image.Image):
+    small = img.resize((64, 64))
+    stat = ImageStat.Stat(small)
+    r, g, b = stat.mean[:3]
+    return (r, g, b)
+
+
+def color_distance(c1, c2):
+    return ((c1[0] - c2[0]) ** 2 + (c1[1] - c2[1]) ** 2 + (c1[2] - c2[2]) ** 2) ** 0.5
+
+
+def color_similarity(img1: Image.Image, img2: Image.Image) -> float:
+    c1 = average_rgb(img1)
+    c2 = average_rgb(img2)
+    dist = color_distance(c1, c2)
+    max_dist = (255**2 + 255**2 + 255**2) ** 0.5
+    sim_value = 1.0 - (dist / max_dist)
+    return max(0.0, min(1.0, sim_value))
+
+
+def crop_card_region(img: Image.Image) -> Image.Image:
+    w, h = img.size
+    return img.crop((0, 0, w, int(h * 0.72)))
+
+
+def crop_loose_region(img: Image.Image) -> Image.Image:
+    w, h = img.size
+    return img.crop((int(w * 0.08), int(h * 0.42), int(w * 0.92), int(h * 0.92)))
+
+
+def compare_visual(user_img: Image.Image, row: dict):
+    card_ref = load_remote_image(row.get("photoCarded", ""))
+    loose_ref = load_remote_image(row.get("photoLoose", ""))
+
+    user_card = crop_card_region(user_img)
+    user_loose = crop_loose_region(user_img)
+
+    card_score = 0.0
+    loose_score = 0.0
+
+    if card_ref is not None:
+        card_score = color_similarity(user_card, card_ref)
+
+    if loose_ref is not None:
+        loose_score = color_similarity(user_loose, loose_ref)
+
+    total_visual = (card_score * 0.65) + (loose_score * 0.35)
+
+    return {
+        "cardedScore": round(card_score, 3),
+        "looseScore": round(loose_score, 3),
+        "visualScore": round(total_visual, 3),
+    }
+
+
 def build_match_payload(scored: dict) -> dict:
     row = scored["row"]
+    total_score = scored["totalScore"]
+
     return {
         "name": row["modelName"],
-        "similarity": min(round(0.35 + scored["score"] * 0.07, 2), 0.98),
+        "similarity": min(round(0.30 + total_score * 0.08, 2), 0.98),
         "type": row["series"],
         "rarity": classify_rarity(row),
         "priceRange": "Pendiente eBay",
@@ -234,12 +308,17 @@ def build_match_payload(scored: dict) -> dict:
         "photoLoose": row["photoLoose"],
         "photoCarded": row["photoCarded"],
         "matchedFields": scored["matchedFields"],
+        "ocrScore": scored["ocrScore"],
+        "cardedScore": scored["cardedScore"],
+        "looseScore": scored["looseScore"],
+        "visualScore": scored["visualScore"],
+        "totalScore": scored["totalScore"],
     }
 
 
 @app.get("/")
 def root():
-    return {"message": "Hot Wheels Classics table backend activo"}
+    return {"message": "Hot Wheels Classics visual matcher activo"}
 
 
 @app.get("/classics/count")
@@ -260,27 +339,44 @@ async def match_hotwheel(
     contents = await image.read()
 
     try:
-        img = Image.open(io.BytesIO(contents)).convert("RGB")
-        width, height = img.size
+        user_img = Image.open(io.BytesIO(contents)).convert("RGB")
+        width, height = user_img.size
 
         rows = parse_classics_table()
-        scored = [compare_row_to_ocr(row, ocr_text) for row in rows]
-        scored.sort(key=lambda x: x["score"], reverse=True)
+        combined = []
 
-        top_scored = [s for s in scored[:5] if s["score"] > 0]
+        for row in rows:
+            ocr_cmp = compare_row_to_ocr(row, ocr_text)
+            vis_cmp = compare_visual(user_img, row)
+
+            total_score = (ocr_cmp["ocrScore"] * 0.55) + (vis_cmp["visualScore"] * 4.0)
+
+            combined.append({
+                "row": row,
+                "matchedFields": ocr_cmp["matchedFields"],
+                "ocrScore": round(ocr_cmp["ocrScore"], 3),
+                "cardedScore": vis_cmp["cardedScore"],
+                "looseScore": vis_cmp["looseScore"],
+                "visualScore": vis_cmp["visualScore"],
+                "totalScore": round(total_score, 3),
+            })
+
+        combined.sort(key=lambda x: x["totalScore"], reverse=True)
+
+        top_scored = combined[:5]
         matches = [build_match_payload(s) for s in top_scored]
 
-        if top_scored and top_scored[0]["score"] >= 1.4:
+        if top_scored and top_scored[0]["totalScore"] >= 1.55:
             top_match = build_match_payload(top_scored[0])
 
             return {
                 "topMatch": top_match,
                 "matches": matches,
                 "message": (
-                    f"Match por tabla Classics. "
+                    f"Match por OCR + comparación visual wiki. "
                     f"Imagen: {width}x{height}. "
-                    f"Score: {top_scored[0]['score']}. "
-                    f"OCR: {normalize_text(ocr_text)}"
+                    f"Top totalScore: {top_scored[0]['totalScore']}. "
+                    f"OCR normalizado: {normalize_text(ocr_text)}"
                 )
             }
 
@@ -288,9 +384,9 @@ async def match_hotwheel(
             "topMatch": None,
             "matches": matches,
             "message": (
-                f"No hubo coincidencia confiable en tabla Classics. "
+                f"No hubo coincidencia confiable. "
                 f"Imagen: {width}x{height}. "
-                f"OCR: {normalize_text(ocr_text)}"
+                f"OCR normalizado: {normalize_text(ocr_text)}"
             )
         }
 
