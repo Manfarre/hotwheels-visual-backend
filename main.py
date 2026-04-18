@@ -17,14 +17,14 @@ app.add_middleware(
 CATALOG = [
     {
         "name": "Batmobile",
-        "keywords": ["BATMOBILE", "BATMAN", "181/250", "2021", "FOR LIFE"],
+        "keywords": ["BATMOBILE", "BATMAOBILE", "BATMAN", "181/250", "2021", "FOR LIFE"],
         "type": "Mainline",
         "rarity": "Media",
         "priceRange": "$100 - $260 MXN",
     },
     {
         "name": "Volkswagen Beetle",
-        "keywords": ["VOLKSWAGEN BEETLE", "BEETLE", "CHECKMATE", "8/9", "VOLKSWAGEN"],
+        "keywords": ["VOLKSWAGEN BEETLE", "BEETLE", "CHECKMATE", "8/9", "VOLKSWAGEN", "VW BEETLE"],
         "type": "Mainline",
         "rarity": "Media",
         "priceRange": "$100 - $220 MXN",
@@ -40,7 +40,7 @@ CATALOG = [
 
 def normalize_text(text: str) -> str:
     text = text.upper()
-    for ch in [",", ".", ":", ";", "-", "_", "(", ")", "[", "]"]:
+    for ch in [",", ".", ":", ";", "-", "_", "(", ")", "[", "]", "'", '"']:
         text = text.replace(ch, " ")
     text = text.replace("/", " / ")
     while "  " in text:
@@ -71,9 +71,6 @@ def keyword_score(keyword: str, normalized_text: str, tokens: list[str]) -> floa
             if score > part_best:
                 part_best = score
         best_part_scores.append(part_best)
-
-    if not best_part_scores:
-        return 0.0
 
     avg_score = sum(best_part_scores) / len(best_part_scores)
 
