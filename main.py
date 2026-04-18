@@ -1,9 +1,11 @@
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
+from bs4 import BeautifulSoup
+from difflib import SequenceMatcher
+import requests
 import io
 import re
-from difflib import SequenceMatcher
 
 app = FastAPI()
 
@@ -15,258 +17,240 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-CATALOG = [
-    {
-        "name": "Batmobile",
-        "keywords": {
-            "BATMOBILE": 1.0,
-            "BATMAOBILE": 0.95,
-            "BATMAN": 0.65,
-            "DC": 0.45,
-            "181/250": 0.45,
-            "181": 0.20,
-            "2021": 0.15,
-            "FOR LIFE": 0.40,
-        },
-        "negative_keywords": ["VOLKSWAGEN", "BEETLE", "DRAG BUS"],
-        "type": "Mainline",
-        "rarity": "Media",
-        "priceRange": "$100 - $260 MXN",
-    },
-    {
-        "name": "Volkswagen Beetle",
-        "keywords": {
-            "VOLKSWAGEN BEETLE": 1.0,
-            "VW BEETLE": 0.95,
-            "BEETLE": 0.70,
-            "VOLKSWAGEN": 0.55,
-            "CHECKMATE": 0.55,
-            "8/9": 0.35,
-        },
-        "negative_keywords": ["BATMAN", "BATMOBILE", "DRAG BUS"],
-        "type": "Mainline",
-        "rarity": "Media",
-        "priceRange": "$100 - $220 MXN",
-    },
-    {
-        "name": "Volkswagen Drag Bus",
-        "keywords": {
-            "VOLKSWAGEN DRAG BUS": 1.0,
-            "DRAG BUS": 0.95,
-            "VW DRAG BUS": 0.95,
-            "BUS": 0.30,
-            "DRAG": 0.30,
-        },
-        "negative_keywords": ["BATMAN", "BATMOBILE", "BEETLE"],
-        "type": "Especial",
-        "rarity": "Alta",
-        "priceRange": "$1200 - $3500 MXN",
-    },
-]
+CLASSICS_URL = "https://hotwheels.fandom.com/wiki/Classics"
 
-NOISE_WORDS = {
-    "HOT", "WHEELS", "MATTEL", "COM", "EXCLUSNE", "EXCLUSIVE", "GUARANTEED",
-    "METAL", "METALFLAKE", "COLLECTOR", "SERIES", "HW", "NEW", "MODEL",
-    "MADE", "MALAYSIA", "THAILAND", "INDONESIA", "WARNING", "AGES",
-}
+session = requests.Session()
+session.headers.update({
+    "User-Agent": "HotWheelsScanner/0.2 (Render Classics Table Parser)"
+})
+
+_cache_rows = None
+
 
 def normalize_text(text: str) -> str:
+    if not text:
+        return ""
     text = text.upper()
     replacements = {
         "0": "O",
         "1": "I",
         "5": "S",
-        "8": "B",
         "|": "I",
     }
     for k, v in replacements.items():
         text = text.replace(k, v)
 
-    for ch in [",", ".", ":", ";", "-", "_", "(", ")", "[", "]", "'", '"', "!", "?"]:
+    for ch in [",", ".", ":", ";", "_", "(", ")", "[", "]", "'", '"', "!", "?"]:
         text = text.replace(ch, " ")
+
+    text = text.replace("-", " ")
     text = text.replace("/", " / ")
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
-def tokenize(text: str):
+
+def tokenize(text: str) -> list[str]:
     return [t for t in normalize_text(text).split(" ") if t.strip()]
 
-def similarity(a: str, b: str) -> float:
+
+def sim(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
-def keyword_score(keyword: str, normalized_text: str, tokens: list[str]) -> float:
-    keyword = normalize_text(keyword)
 
-    if keyword in normalized_text:
-        return 1.0
+def safe_text(el) -> str:
+    return el.get_text(" ", strip=True) if el else ""
 
-    keyword_parts = [p for p in keyword.split(" ") if p.strip()]
-    if not keyword_parts:
+
+def abs_url(url: str) -> str:
+    if not url:
+        return ""
+    if url.startswith("//"):
+        return "https:" + url
+    if url.startswith("/"):
+        return "https://hotwheels.fandom.com" + url
+    return url
+
+
+def extract_first_img(cell) -> str:
+    if cell is None:
+        return ""
+    img = cell.find("img")
+    if img:
+        return abs_url(img.get("data-src") or img.get("src") or "")
+    a = cell.find("a")
+    if a:
+        return abs_url(a.get("href") or "")
+    return ""
+
+
+def parse_classics_table() -> list[dict]:
+    global _cache_rows
+    if _cache_rows is not None:
+        return _cache_rows
+
+    response = session.get(CLASSICS_URL, timeout=30)
+    response.raise_for_status()
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    tables = soup.find_all("table")
+
+    rows = []
+
+    for table in tables:
+        headers = [safe_text(th) for th in table.find_all("th")]
+        header_text = " | ".join(headers).upper()
+
+        if "TOY #" not in header_text or "MODEL NAME" not in header_text:
+            continue
+
+        body_rows = table.find_all("tr")
+        for tr in body_rows[1:]:
+            cells = tr.find_all(["td", "th"])
+            if len(cells) < 9:
+                continue
+
+            toy_number = safe_text(cells[0])
+            model_name = safe_text(cells[1])
+            color = safe_text(cells[2])
+            year = safe_text(cells[3])
+            wheel_type = safe_text(cells[4])
+            country = safe_text(cells[5])
+            notes = safe_text(cells[6])
+            photo_loose = extract_first_img(cells[7])
+            photo_carded = extract_first_img(cells[8])
+
+            if not model_name:
+                continue
+
+            rows.append({
+                "series": "Classics",
+                "toyNumber": toy_number,
+                "modelName": model_name,
+                "color": color,
+                "year": year,
+                "wheelType": wheel_type,
+                "country": country,
+                "notes": notes,
+                "photoLoose": photo_loose,
+                "photoCarded": photo_carded,
+            })
+
+    _cache_rows = rows
+    return rows
+
+
+def field_score(ocr_normalized: str, tokens: list[str], value: str, weight: float) -> float:
+    if not value:
         return 0.0
 
-    best_part_scores = []
-    for part in keyword_parts:
-        part_best = 0.0
-        for token in tokens:
-            score = similarity(part, token)
-            if score > part_best:
-                part_best = score
-        best_part_scores.append(part_best)
-
-    if not best_part_scores:
+    value_norm = normalize_text(value)
+    if not value_norm:
         return 0.0
 
-    avg_score = sum(best_part_scores) / len(best_part_scores)
+    score = 0.0
 
-    if len(keyword_parts) >= 2:
-        if avg_score >= 0.84:
-            return avg_score
-    else:
-        if avg_score >= 0.90:
-            return avg_score
+    if value_norm in ocr_normalized:
+        score += 1.0 * weight
 
-    return 0.0
+    parts = [p for p in value_norm.split(" ") if len(p) >= 2]
+    if parts:
+        hits = 0
+        fuzzy_hits = 0
 
-def compute_text_quality(tokens: list[str]) -> float:
-    if not tokens:
-        return 0.0
+        for part in parts:
+            if part in ocr_normalized:
+                hits += 1
+                continue
 
-    useful = 0
-    for t in tokens:
-        if len(t) >= 3 and t not in NOISE_WORDS:
-            useful += 1
+            best = 0.0
+            for token in tokens:
+                best = max(best, sim(part, token))
 
-    quality = useful / max(len(tokens), 1)
-    return round(quality, 3)
+            if best >= 0.88:
+                fuzzy_hits += 1
 
-def find_all_matches(ocr_text: str):
-    normalized = normalize_text(ocr_text)
+        ratio = (hits + fuzzy_hits * 0.8) / len(parts)
+        score += ratio * weight
+
+    return score
+
+
+def compare_row_to_ocr(row: dict, ocr_text: str) -> dict:
+    ocr_normalized = normalize_text(ocr_text)
     tokens = tokenize(ocr_text)
-    text_quality = compute_text_quality(tokens)
 
-    results = []
+    score = 0.0
+    matched = []
 
-    for item in CATALOG:
-        total_score = 0.0
-        matched_keywords = []
-        penalties = []
+    checks = [
+        ("toyNumber", row["toyNumber"], 1.2),
+        ("modelName", row["modelName"], 3.0),
+        ("color", row["color"], 1.0),
+        ("year", row["year"], 0.9),
+        ("wheelType", row["wheelType"], 0.8),
+        ("country", row["country"], 0.5),
+        ("notes", row["notes"], 1.4),
+        ("series", row["series"], 0.6),
+    ]
 
-        for keyword, weight in item["keywords"].items():
-            score = keyword_score(keyword, normalized, tokens)
-            if score > 0:
-                weighted = score * weight
-                total_score += weighted
-                matched_keywords.append((keyword, round(weighted, 2)))
+    for label, value, weight in checks:
+        s = field_score(ocr_normalized, tokens, value, weight)
+        if s > 0:
+            score += s
+            matched.append((label, value, round(s, 2)))
 
-        for neg in item.get("negative_keywords", []):
-            neg_norm = normalize_text(neg)
-            if neg_norm in normalized:
-                total_score -= 0.45
-                penalties.append(neg)
-
-        if text_quality < 0.15:
-            total_score *= 0.75
-        elif text_quality < 0.25:
-            total_score *= 0.88
-
-        results.append({
-            "item": item,
-            "score": round(total_score, 3),
-            "matched_keywords": matched_keywords,
-            "penalties": penalties,
-        })
-
-    results.sort(key=lambda x: x["score"], reverse=True)
-    return results, normalized, text_quality
-
-def color_ratio(img: Image.Image, predicate):
-    small = img.resize((100, 100))
-    pixels = list(small.getdata())
-    if not pixels:
-        return 0.0
-    count = sum(1 for p in pixels if predicate(p[0], p[1], p[2]))
-    return count / len(pixels)
-
-def visual_fallback(img: Image.Image, text_quality: float):
-    width, height = img.size
-
-    top_half = img.crop((0, 0, width, int(height * 0.55)))
-    center_band = img.crop((int(width * 0.15), int(height * 0.15), int(width * 0.85), int(height * 0.60)))
-
-    blue_ratio_top = color_ratio(
-        top_half,
-        lambda r, g, b: b > 110 and b > r + 20 and b > g + 10
-    )
-    dark_ratio_top = color_ratio(
-        top_half,
-        lambda r, g, b: r < 70 and g < 70 and b < 90
-    )
-    red_ratio_top = color_ratio(
-        top_half,
-        lambda r, g, b: r > 120 and r > g + 25 and r > b + 25
-    )
-    yellow_ratio_top = color_ratio(
-        top_half,
-        lambda r, g, b: r > 150 and g > 120 and b < 120
-    )
-    dark_ratio_center = color_ratio(
-        center_band,
-        lambda r, g, b: r < 95 and g < 95 and b < 95
-    )
-    blue_ratio_center = color_ratio(
-        center_band,
-        lambda r, g, b: b > 100 and b > r + 15 and b > g + 10
-    )
-
-    # Solo usar fallback visual si el texto es pobre
-    if text_quality > 0.22:
-        return None
-
-    if blue_ratio_top >= 0.22 and dark_ratio_top >= 0.18 and (dark_ratio_center >= 0.20 or blue_ratio_center >= 0.18):
-        return {
-            "name": "Batmobile",
-            "similarity": 0.64,
-            "type": "Mainline",
-            "rarity": "Media",
-            "priceRange": "$100 - $260 MXN",
-            "debug": {
-                "reason": "fallback_visual_batmobile",
-                "blue_ratio_top": round(blue_ratio_top, 2),
-                "dark_ratio_top": round(dark_ratio_top, 2),
-                "dark_ratio_center": round(dark_ratio_center, 2),
-                "blue_ratio_center": round(blue_ratio_center, 2),
-            }
-        }
-
-    if blue_ratio_top >= 0.24 and (red_ratio_top >= 0.12 or yellow_ratio_top >= 0.10):
-        return {
-            "name": "Volkswagen Beetle",
-            "similarity": 0.57,
-            "type": "Mainline",
-            "rarity": "Media",
-            "priceRange": "$100 - $220 MXN",
-            "debug": {
-                "reason": "fallback_visual_beetle",
-                "blue_ratio_top": round(blue_ratio_top, 2),
-                "red_ratio_top": round(red_ratio_top, 2),
-                "yellow_ratio_top": round(yellow_ratio_top, 2),
-            }
-        }
-
-    return None
-
-def build_match_payload(item, similarity_value):
     return {
-        "name": item["name"],
-        "similarity": round(similarity_value, 2),
-        "type": item["type"],
-        "rarity": item["rarity"],
-        "priceRange": item["priceRange"],
+        "row": row,
+        "score": round(score, 3),
+        "matchedFields": matched,
     }
+
+
+def classify_rarity(row: dict) -> str:
+    notes = normalize_text(row.get("notes", ""))
+    model = normalize_text(row.get("modelName", ""))
+    if "EXCLUSIVE" in notes or "CONVENTION" in notes:
+        return "Alta"
+    if "BEACH BOMB" in model:
+        return "Alta"
+    return "Media"
+
+
+def build_match_payload(scored: dict) -> dict:
+    row = scored["row"]
+    return {
+        "name": row["modelName"],
+        "similarity": min(round(0.35 + scored["score"] * 0.07, 2), 0.98),
+        "type": row["series"],
+        "rarity": classify_rarity(row),
+        "priceRange": "Pendiente eBay",
+        "toyNumber": row["toyNumber"],
+        "modelName": row["modelName"],
+        "color": row["color"],
+        "year": row["year"],
+        "wheelType": row["wheelType"],
+        "country": row["country"],
+        "notes": row["notes"],
+        "photoLoose": row["photoLoose"],
+        "photoCarded": row["photoCarded"],
+        "matchedFields": scored["matchedFields"],
+    }
+
 
 @app.get("/")
 def root():
-    return {"message": "Hot Wheels visual backend activo"}
+    return {"message": "Hot Wheels Classics table backend activo"}
+
+
+@app.get("/classics/count")
+def classics_count():
+    rows = parse_classics_table()
+    return {
+        "series": "Classics",
+        "count": len(rows),
+        "source": CLASSICS_URL
+    }
+
 
 @app.post("/match")
 async def match_hotwheel(
@@ -279,68 +263,34 @@ async def match_hotwheel(
         img = Image.open(io.BytesIO(contents)).convert("RGB")
         width, height = img.size
 
-        ranked, normalized_text, text_quality = find_all_matches(ocr_text)
-        best = ranked[0] if ranked else None
-        second = ranked[1] if len(ranked) > 1 else None
+        rows = parse_classics_table()
+        scored = [compare_row_to_ocr(row, ocr_text) for row in rows]
+        scored.sort(key=lambda x: x["score"], reverse=True)
 
-        top_matches = []
-        for r in ranked[:3]:
-            if r["score"] > 0:
-                similarity_value = min(0.50 + (r["score"] * 0.10), 0.97)
-                top_matches.append(build_match_payload(r["item"], similarity_value))
+        top_scored = [s for s in scored[:5] if s["score"] > 0]
+        matches = [build_match_payload(s) for s in top_scored]
 
-        if best and best["score"] >= 0.95:
-            margin_ok = (second is None) or ((best["score"] - second["score"]) >= 0.18)
-
-            if margin_ok:
-                similarity_value = min(0.55 + (best["score"] * 0.09), 0.98)
-                top_match = build_match_payload(best["item"], similarity_value)
-
-                return {
-                    "topMatch": top_match,
-                    "matches": top_matches,
-                    "message": (
-                        f"Match por OCR backend. "
-                        f"Imagen: {width}x{height}. "
-                        f"Score: {round(best['score'], 2)}. "
-                        f"TextQuality: {text_quality}. "
-                        f"Keywords: {best.get('matched_keywords', [])}. "
-                        f"Penalties: {best.get('penalties', [])}. "
-                        f"Texto: {normalized_text}"
-                    )
-                }
-
-        fallback = visual_fallback(img, text_quality)
-        if fallback:
-            top_match = {
-                "name": fallback["name"],
-                "similarity": fallback["similarity"],
-                "type": fallback["type"],
-                "rarity": fallback["rarity"],
-                "priceRange": fallback["priceRange"],
-            }
+        if top_scored and top_scored[0]["score"] >= 1.4:
+            top_match = build_match_payload(top_scored[0])
 
             return {
                 "topMatch": top_match,
-                "matches": [top_match],
+                "matches": matches,
                 "message": (
-                    f"Match por fallback visual. "
+                    f"Match por tabla Classics. "
                     f"Imagen: {width}x{height}. "
-                    f"TextQuality: {text_quality}. "
-                    f"Debug: {fallback['debug']}. "
-                    f"Texto OCR: {normalized_text}"
+                    f"Score: {top_scored[0]['score']}. "
+                    f"OCR: {normalize_text(ocr_text)}"
                 )
             }
 
         return {
             "topMatch": None,
-            "matches": top_matches,
+            "matches": matches,
             "message": (
-                f"No hubo coincidencia confiable. "
+                f"No hubo coincidencia confiable en tabla Classics. "
                 f"Imagen: {width}x{height}. "
-                f"BestScore: {round(best['score'], 2) if best else 0}. "
-                f"TextQuality: {text_quality}. "
-                f"Texto: {normalized_text}"
+                f"OCR: {normalize_text(ocr_text)}"
             )
         }
 
