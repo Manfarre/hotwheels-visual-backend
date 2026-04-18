@@ -21,17 +21,25 @@ CLASSICS_URL = "https://hotwheels.fandom.com/wiki/Classics"
 
 session = requests.Session()
 session.headers.update({
-    "User-Agent": "HotWheelsScanner/0.3 (Render OCR + visual wiki matcher)"
+    "User-Agent": "HotWheelsScanner/0.4"
 })
 
 _cache_rows = None
 _image_cache = {}
+
+GENERIC_WORDS = {
+    "HOT", "WHEELS", "MATTEL", "CLASSICS", "FOR", "AGES", "OVER", "DIE",
+    "CAST", "METAL", "PLASTIC", "MALAYSIA", "THAILAND", "INDONESIA",
+    "COLLECTOR", "COLLECTORS", "SERIES", "TOY", "MODEL", "MADE",
+    "GLAS", "WLATE", "MAETL", "CLSSICS", "NTTEL"
+}
 
 
 def normalize_text(text: str) -> str:
     if not text:
         return ""
     text = text.upper()
+
     replacements = {
         "0": "O",
         "1": "I",
@@ -52,6 +60,20 @@ def normalize_text(text: str) -> str:
 
 def tokenize(text: str) -> list[str]:
     return [t for t in normalize_text(text).split(" ") if t.strip()]
+
+
+def clean_ocr_tokens(text: str) -> list[str]:
+    tokens = tokenize(text)
+    result = []
+    for t in tokens:
+        if len(t) < 2:
+            continue
+        if t in GENERIC_WORDS:
+            continue
+        if t.isdigit() and len(t) <= 2:
+            continue
+        result.append(t)
+    return result
 
 
 def sim(a: str, b: str) -> float:
@@ -140,7 +162,7 @@ def parse_classics_table() -> list[dict]:
     return rows
 
 
-def field_score(ocr_normalized: str, tokens: list[str], value: str, weight: float) -> float:
+def field_score(ocr_tokens: list[str], value: str, weight: float) -> float:
     if not value:
         return 0.0
 
@@ -148,54 +170,49 @@ def field_score(ocr_normalized: str, tokens: list[str], value: str, weight: floa
     if not value_norm:
         return 0.0
 
-    score = 0.0
+    value_parts = [p for p in value_norm.split() if len(p) >= 2]
+    if not value_parts:
+        return 0.0
 
-    if value_norm in ocr_normalized:
-        score += 1.0 * weight
+    hits = 0.0
 
-    parts = [p for p in value_norm.split(" ") if len(p) >= 2]
-    if parts:
-        hits = 0
-        fuzzy_hits = 0
+    for part in value_parts:
+        if part in GENERIC_WORDS:
+            continue
 
-        for part in parts:
-            if part in ocr_normalized:
-                hits += 1
-                continue
+        best = 0.0
+        for token in ocr_tokens:
+            best = max(best, sim(part, token))
 
-            best = 0.0
-            for token in tokens:
-                best = max(best, sim(part, token))
+        if best >= 0.95:
+            hits += 1.0
+        elif best >= 0.88:
+            hits += 0.8
+        elif best >= 0.80:
+            hits += 0.45
 
-            if best >= 0.88:
-                fuzzy_hits += 1
-
-        ratio = (hits + fuzzy_hits * 0.8) / len(parts)
-        score += ratio * weight
-
-    return score
+    ratio = hits / max(len([p for p in value_parts if p not in GENERIC_WORDS]), 1)
+    return ratio * weight
 
 
 def compare_row_to_ocr(row: dict, ocr_text: str) -> dict:
-    ocr_normalized = normalize_text(ocr_text)
-    tokens = tokenize(ocr_text)
+    ocr_tokens = clean_ocr_tokens(ocr_text)
 
     score = 0.0
     matched = []
 
     checks = [
-        ("toyNumber", row["toyNumber"], 1.2),
-        ("modelName", row["modelName"], 3.0),
-        ("color", row["color"], 1.0),
-        ("year", row["year"], 0.9),
+        ("toyNumber", row["toyNumber"], 1.0),
+        ("modelName", row["modelName"], 4.0),
+        ("color", row["color"], 1.2),
+        ("year", row["year"], 0.8),
         ("wheelType", row["wheelType"], 0.8),
-        ("country", row["country"], 0.5),
-        ("notes", row["notes"], 1.4),
-        ("series", row["series"], 0.6),
+        ("country", row["country"], 0.3),
+        ("notes", row["notes"], 1.6),
     ]
 
     for label, value, weight in checks:
-        s = field_score(ocr_normalized, tokens, value, weight)
+        s = field_score(ocr_tokens, value, weight)
         if s > 0:
             score += s
             matched.append((label, value, round(s, 2)))
@@ -204,6 +221,7 @@ def compare_row_to_ocr(row: dict, ocr_text: str) -> dict:
         "row": row,
         "ocrScore": round(score, 3),
         "matchedFields": matched,
+        "filteredOcrTokens": ocr_tokens,
     }
 
 
@@ -234,7 +252,7 @@ def load_remote_image(url: str):
 
 
 def average_rgb(img: Image.Image):
-    small = img.resize((64, 64))
+    small = img.resize((80, 80))
     stat = ImageStat.Stat(small)
     r, g, b = stat.mean[:3]
     return (r, g, b)
@@ -279,7 +297,7 @@ def compare_visual(user_img: Image.Image, row: dict):
     if loose_ref is not None:
         loose_score = color_similarity(user_loose, loose_ref)
 
-    total_visual = (card_score * 0.65) + (loose_score * 0.35)
+    total_visual = (card_score * 0.75) + (loose_score * 0.25)
 
     return {
         "cardedScore": round(card_score, 3),
@@ -288,13 +306,23 @@ def compare_visual(user_img: Image.Image, row: dict):
     }
 
 
+def decide_source(total_score: float, ocr_score: float, visual_score: float) -> str:
+    if visual_score >= 0.72 and ocr_score >= 1.0:
+        return "OCR + visual wiki"
+    if visual_score >= 0.74:
+        return "Visual wiki"
+    if ocr_score >= 1.6:
+        return "OCR"
+    return "Coincidencia parcial"
+
+
 def build_match_payload(scored: dict) -> dict:
     row = scored["row"]
     total_score = scored["totalScore"]
 
     return {
         "name": row["modelName"],
-        "similarity": min(round(0.30 + total_score * 0.08, 2), 0.98),
+        "similarity": min(round(0.28 + total_score * 0.09, 2), 0.98),
         "type": row["series"],
         "rarity": classify_rarity(row),
         "priceRange": "Pendiente eBay",
@@ -313,6 +341,11 @@ def build_match_payload(scored: dict) -> dict:
         "looseScore": scored["looseScore"],
         "visualScore": scored["visualScore"],
         "totalScore": scored["totalScore"],
+        "sourceType": decide_source(
+            scored["totalScore"],
+            scored["ocrScore"],
+            scored["visualScore"]
+        ),
     }
 
 
@@ -349,11 +382,12 @@ async def match_hotwheel(
             ocr_cmp = compare_row_to_ocr(row, ocr_text)
             vis_cmp = compare_visual(user_img, row)
 
-            total_score = (ocr_cmp["ocrScore"] * 0.55) + (vis_cmp["visualScore"] * 4.0)
+            total_score = (ocr_cmp["ocrScore"] * 0.30) + (vis_cmp["visualScore"] * 5.5)
 
             combined.append({
                 "row": row,
                 "matchedFields": ocr_cmp["matchedFields"],
+                "filteredOcrTokens": ocr_cmp["filteredOcrTokens"],
                 "ocrScore": round(ocr_cmp["ocrScore"], 3),
                 "cardedScore": vis_cmp["cardedScore"],
                 "looseScore": vis_cmp["looseScore"],
@@ -363,20 +397,22 @@ async def match_hotwheel(
 
         combined.sort(key=lambda x: x["totalScore"], reverse=True)
 
-        top_scored = combined[:5]
+        top_scored = combined[:3]
         matches = [build_match_payload(s) for s in top_scored]
 
-        if top_scored and top_scored[0]["totalScore"] >= 1.55:
-            top_match = build_match_payload(top_scored[0])
+        best = top_scored[0] if top_scored else None
+
+        if best and best["totalScore"] >= 3.55:
+            top_match = build_match_payload(best)
 
             return {
                 "topMatch": top_match,
                 "matches": matches,
                 "message": (
-                    f"Match por OCR + comparación visual wiki. "
+                    f"Match por {top_match['sourceType']}. "
                     f"Imagen: {width}x{height}. "
-                    f"Top totalScore: {top_scored[0]['totalScore']}. "
-                    f"OCR normalizado: {normalize_text(ocr_text)}"
+                    f"Top totalScore: {best['totalScore']}. "
+                    f"OCR filtrado: {best['filteredOcrTokens']}"
                 )
             }
 
@@ -386,7 +422,7 @@ async def match_hotwheel(
             "message": (
                 f"No hubo coincidencia confiable. "
                 f"Imagen: {width}x{height}. "
-                f"OCR normalizado: {normalize_text(ocr_text)}"
+                f"OCR filtrado: {best['filteredOcrTokens'] if best else []}"
             )
         }
 
