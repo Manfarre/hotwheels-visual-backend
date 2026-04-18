@@ -27,6 +27,31 @@ HEADERS = {
 WIKI_BASE = "https://hotwheels.fandom.com"
 WIKI_SEARCH_URL = f"{WIKI_BASE}/wiki/Special:Search?query="
 
+GENERIC_WORDS = {
+    "HOT", "WHEELS", "MATTEL", "CLASSICS", "SERIES", "ONE", "CHECKMATE",
+    "FOR", "AGES", "OVER", "DIE", "CAST", "METAL", "PLASTIC",
+    "ONLINE", "EXCLUSIVE", "COLLECTOR", "COLLECTORS", "MAINLINE", "PREMIUM",
+    "CLUB", "REDLINE", "RED", "LINE", "LIMITED", "EDITION", "MODEL",
+    "CAR", "CARS", "TOY", "TOYS", "ITEM", "CARD", "CARDED", "LOOSE",
+    "THE", "AND", "WITH", "NEW", "COM", "WWW", "HTTP", "HTTPS",
+    "SPECIAL", "SEARCH", "WIKI", "FANDOM"
+}
+
+NOISE_WORDS = {
+    "TIKTOK", "FACEBOOK", "INSTAGRAM", "EBAY", "MERCADO", "GOOGLE",
+    "GUARDAR", "COMPARTIR", "DERECHOS", "INFORMACION", "INFORMACIÓN",
+    "RESULTADOS", "BUSCAR", "ARTICULO", "ARTÍCULO", "POSIBLE",
+    "IMAGENES", "IMÁGENES", "AUTOR", "MAS", "MÁS", "RESPONDER",
+    "CHATGPT", "IR", "MENU", "MESSAGE", "MENSAJE", "LIKE", "VIEWS"
+}
+
+STRONG_MODEL_HINTS = {
+    "VOLKSWAGEN", "BEETLE", "BATMOBILE", "BOMB", "BEACH", "BUS",
+    "DRAG", "CHEVY", "FORD", "MERCEDES", "BONE", "SHAKER", "DODGE",
+    "PONTIAC", "CAMARO", "MUSTANG", "CORVETTE", "BEL", "AIR", "NOVA",
+    "PICKUP", "DELIVERY", "DOOZIE", "DEORA", "BARRACUDA", "THUNDERBIRD"
+}
+
 
 # --------------------------------------------------
 # UTILIDADES BÁSICAS
@@ -36,7 +61,7 @@ def normalize_text(text: str) -> str:
         return ""
     text = text.upper()
     text = text.replace("\n", " ")
-    for ch in [",", ".", ":", ";", "_", "(", ")", "[", "]", "{", "}", "'", '"', "|", "•", "·"]:
+    for ch in [",", ".", ":", ";", "_", "(", ")", "[", "]", "{", "}", "'", '"', "|", "•", "·", "!", "?", "*", "="]:
         text = text.replace(ch, " ")
     text = text.replace("/", " / ")
     text = text.replace("-", " ")
@@ -70,19 +95,25 @@ def safe_get(url: str, timeout: int = 20) -> Optional[requests.Response]:
         return None
 
 
+def has_letters(text: str) -> bool:
+    return any(ch.isalpha() for ch in text)
+
+
+def is_mainly_numeric(text: str) -> bool:
+    stripped = text.replace(" ", "")
+    if not stripped:
+        return False
+    digits = sum(1 for ch in stripped if ch.isdigit())
+    return digits >= max(3, len(stripped) // 2)
+
+
 # --------------------------------------------------
 # OCR LIMPIO Y SEÑALES
 # --------------------------------------------------
 def clean_ocr_lines(ocr_text: str) -> List[str]:
     lines_raw = re.split(r"[\n\r]+", ocr_text or "")
-    blocked_patterns = [
-        "TIKTOK", "FACEBOOK", "INSTAGRAM", "EBAY", "MERCADO", "GOOGLE",
-        "GUARDAR", "COMPARTIR", "DERECHOS", "INFORMACION", "INFORMACIÓN",
-        "RESULTADOS", "BUSCAR", "ARTICULO", "ARTÍCULO", "IR >", "IR>",
-        "POSIBLE", "IMAGENES", "IMÁGENES", "AUTOR", "MÁS", "MAS"
-    ]
-
     cleaned = []
+
     for line in lines_raw:
         line = normalize_text(line)
         if not line:
@@ -94,7 +125,7 @@ def clean_ocr_lines(ocr_text: str) -> List[str]:
         if sum(1 for ch in line if ch.isalpha()) < 2 and sum(1 for ch in line if ch.isdigit()) < 2:
             continue
 
-        if any(bp in line for bp in blocked_patterns):
+        if any(noise in line for noise in NOISE_WORDS):
             continue
 
         cleaned.append(line)
@@ -115,16 +146,16 @@ def extract_fractions(text: str) -> List[str]:
 
 def extract_series(text: str) -> str:
     candidates = [
-        "MAINLINE",
+        "RLC",
+        "RED LINE CLUB",
         "PREMIUM",
         "CLASSICS",
         "CHECKMATE",
         "HW SCREEN TIME",
         "BATMAN",
-        "RED LINE CLUB",
-        "RLC",
         "SERIES ONE",
         "SERIES 1",
+        "MAINLINE",
     ]
     t = normalize_text(text)
     for c in candidates:
@@ -134,20 +165,15 @@ def extract_series(text: str) -> str:
 
 
 def extract_terms(clean_lines: List[str]) -> List[str]:
-    stopwords = {
-        "HOT", "WHEELS", "MATTEL", "FOR", "AGES", "OVER", "DIE", "CAST",
-        "METAL", "PLASTIC", "ONLINE", "EXCLUSIVE", "SERIES", "CLASSICS",
-        "THE", "AND", "WITH", "COM", "WWW", "HTTP", "HTTPS", "TOY",
-        "TOYS", "MODEL", "NEW", "CLUB", "LIMITED", "EDITION", "ITEM",
-        "CARD", "CARDED", "LOOSE", "CAR", "CARS"
-    }
-
     tokens: List[str] = []
+
     for line in clean_lines:
         for token in line.split():
             if len(token) < 3:
                 continue
-            if token in stopwords:
+            if token in GENERIC_WORDS:
+                continue
+            if token in NOISE_WORDS:
                 continue
             if re.fullmatch(r"[0-9/]+", token):
                 continue
@@ -156,65 +182,86 @@ def extract_terms(clean_lines: List[str]) -> List[str]:
     return unique_keep_order(tokens)
 
 
+def looks_like_good_phrase(phrase: str) -> bool:
+    if not phrase:
+        return False
+
+    words = phrase.split()
+    if len(words) < 2:
+        return False
+
+    useful_words = [w for w in words if w not in GENERIC_WORDS and w not in NOISE_WORDS]
+    if len(useful_words) < 2:
+        return False
+
+    if is_mainly_numeric(phrase):
+        return False
+
+    if not has_letters(phrase):
+        return False
+
+    return True
+
+
 def infer_probable_name(joined_text: str) -> str:
+    """
+    General, sin catálogo fijo.
+    Solo intenta sacar una frase probable del OCR limpio.
+    Si no hay señal suficiente, devuelve vacío.
+    """
     text = normalize_text(joined_text)
     if not text:
         return ""
 
-    stopwords = {
-        "HOT", "WHEELS", "MATTEL", "CLASSICS", "SERIES", "ONE", "CHECKMATE",
-        "COLLECTOR", "COLLECTORS", "COM", "WWW", "ONLINE", "EXCLUSIVE",
-        "FOR", "AGES", "OVER", "DIE", "CAST", "METAL", "PLASTIC",
-        "NEW", "MODEL", "CAR", "TOY", "MAINLINE", "PREMIUM", "REDLINE",
-        "CLUB", "LIMITED", "EDITION", "THE", "AND", "WITH"
-    }
-
-    tokens = [t for t in text.split() if len(t) >= 3 and t not in stopwords]
+    tokens = [t for t in text.split() if len(t) >= 3 and t not in NOISE_WORDS]
 
     if not tokens:
         return ""
 
-    candidates = []
+    candidates: List[str] = []
 
     for size in [4, 3, 2]:
         for i in range(len(tokens) - size + 1):
-            phrase = " ".join(tokens[i:i + size])
+            phrase = " ".join(tokens[i:i + size]).strip()
 
-            if sum(ch.isdigit() for ch in phrase) >= max(2, len(phrase) // 2):
-                continue
-
-            if re.fullmatch(r"[0-9/\- ]+", phrase):
+            if not looks_like_good_phrase(phrase):
                 continue
 
             candidates.append(phrase)
 
     candidates = unique_keep_order(candidates)
+    if not candidates:
+        return ""
 
-    scored = []
+    scored: List[tuple[str, float]] = []
     for phrase in candidates:
-        score = 0
-
         words = phrase.split()
-        if len(words) >= 2:
-            score += 3
-        if len(words) >= 3:
-            score += 1
-        if any(ch.isalpha() for ch in phrase):
-            score += 1
-        if not re.search(r"\b(COM|WWW|TIKTOK|FACEBOOK|EBAY|GOOGLE)\b", phrase):
-            score += 2
-        if re.search(r"\b(VOLKSWAGEN|BATMOBILE|BOMB|BUS|FORD|CHEVY|BONE|SHAKER|DRAG|BEETLE)\b", phrase):
-            score += 2
+        useful_words = [w for w in words if w not in GENERIC_WORDS]
+        score = 0.0
+
+        score += len(useful_words) * 1.2
+        score += 0.6 if len(words) >= 3 else 0.0
+
+        strong_hits = sum(1 for w in useful_words if w in STRONG_MODEL_HINTS)
+        score += strong_hits * 1.4
+
+        generic_hits = sum(1 for w in words if w in GENERIC_WORDS)
+        score -= generic_hits * 0.9
+
+        if any(w in NOISE_WORDS for w in words):
+            score -= 2.0
+
+        # Prefiere frases con más letras reales
+        letters = sum(1 for ch in phrase if ch.isalpha())
+        score += min(1.2, letters / 20.0)
 
         scored.append((phrase, score))
 
     scored.sort(key=lambda x: x[1], reverse=True)
+    best_phrase, best_score = scored[0]
 
-    if not scored:
-        return ""
-
-    best_phrase = scored[0][0]
-    if len(best_phrase.replace(" ", "")) < 6:
+    # Umbral más alto para no inventar
+    if best_score < 3.2:
         return ""
 
     return best_phrase
@@ -240,36 +287,45 @@ def extract_signal_pack(ocr_text: str) -> Dict[str, Any]:
     }
 
 
-def build_search_query(signals: Dict[str, Any]) -> str:
-    parts: List[str] = []
-
+def build_search_queries(signals: Dict[str, Any]) -> List[str]:
     probable_name = signals.get("probableName", "")
     series = signals.get("series", "")
     years = signals.get("years", [])
     fractions = signals.get("fractions", [])
     terms = signals.get("terms", [])
 
+    queries: List[str] = []
+
     if probable_name:
-        parts.append(probable_name)
+        q = [probable_name]
+        if series:
+            q.append(series)
+        if fractions:
+            q.append(fractions[0])
+        queries.append(" ".join(q).strip())
+
+    useful_terms = [t for t in terms if t not in GENERIC_WORDS and t not in NOISE_WORDS]
+
+    if len(useful_terms) >= 2:
+        q = useful_terms[:4]
+        if series:
+            q.append(series)
+        if fractions:
+            q.append(fractions[0])
+        queries.append(" ".join(unique_keep_order(q)).strip())
+
+    if series and fractions:
+        queries.append(f"{series} {fractions[0]} HOT WHEELS")
 
     if series:
-        parts.append(series)
-
-    if fractions:
-        parts.append(fractions[0])
+        queries.append(f"{series} HOT WHEELS")
 
     if years:
-        parts.append(years[0])
+        queries.append(f"HOT WHEELS {years[0]}")
 
-    if not probable_name:
-        blocked = {"HOT", "WHEELS", "ONLINE", "EXCLUSIVE", "MATTEL", "CLASSICS"}
-        useful_terms = [t for t in terms if t not in blocked]
-        parts.extend(useful_terms[:5])
+    queries.append("HOT WHEELS")
 
-    if not parts:
-        parts = ["HOT WHEELS"]
-
-    return " ".join(unique_keep_order(parts)).strip()
+    return unique_keep_order([q for q in queries if q.strip()])
 
 
 # --------------------------------------------------
@@ -300,7 +356,6 @@ def parse_search_results(html: str) -> List[Dict[str, str]]:
     if results:
         return results[:10]
 
-    # Si cayó directo en una página wiki y no en resultados de búsqueda
     title_tag = soup.select_one("h1.page-header__title, h1#firstHeading")
     canon = soup.find("link", rel="canonical")
     if title_tag and canon and canon.get("href"):
@@ -388,14 +443,38 @@ def infer_rarity_from_page_text(text: str) -> str:
         return "Alta"
     if "PREMIUM" in t:
         return "Media-alta"
+    if "CLASSICS" in t:
+        return "Media"
     return "Por validar"
 
 
 def infer_price_placeholder(page_text: str) -> str:
-    # Mientras no entre eBay vendido/completado, dejamos esto abierto
-    if "RLC" in page_text or "RED LINE CLUB" in page_text:
+    t = normalize_text(page_text)
+    if "RLC" in t or "RED LINE CLUB" in t:
+        return "Consultar mercado"
+    if "PREMIUM" in t:
         return "Consultar mercado"
     return "Sin información"
+
+
+def title_quality_score(title: str) -> float:
+    title_n = normalize_text(title)
+    words = [w for w in title_n.split() if w]
+
+    useful = [w for w in words if w not in GENERIC_WORDS and w not in NOISE_WORDS]
+    generic = [w for w in words if w in GENERIC_WORDS]
+
+    score = 0.0
+    score += len(useful) * 0.8
+    score -= len(generic) * 0.25
+
+    if len(useful) >= 2:
+        score += 1.0
+
+    if any(w in STRONG_MODEL_HINTS for w in useful):
+        score += 1.2
+
+    return score
 
 
 def score_wiki_candidate(
@@ -404,7 +483,9 @@ def score_wiki_candidate(
     query: str,
     joined_text: str,
     probable_name: str,
-    terms: List[str]
+    terms: List[str],
+    fractions: List[str],
+    series: str
 ) -> float:
     title_n = normalize_text(title)
     page_n = normalize_text(page_text)
@@ -413,24 +494,76 @@ def score_wiki_candidate(
 
     score = 0.0
 
-    score += similarity(title_n, query_n) * 2.5
-    score += similarity(title_n, joined_n) * 1.6
+    score += similarity(title_n, query_n) * 2.0
+    score += similarity(title_n, joined_n) * 1.5
+    score += title_quality_score(title_n)
 
     if probable_name:
-        score += similarity(title_n, probable_name) * 2.8
+        score += similarity(title_n, probable_name) * 2.2
         if probable_name in title_n:
-            score += 1.4
+            score += 1.6
 
-    for term in terms[:8]:
+    useful_terms = [t for t in terms if t not in GENERIC_WORDS and t not in NOISE_WORDS]
+    for term in useful_terms[:8]:
         if term in title_n:
-            score += 0.55
+            score += 0.65
         elif term in page_n:
             score += 0.20
 
-    if title_n in joined_n:
-        score += 1.0
+    for fraction in fractions[:3]:
+        if fraction in page_n or fraction in title_n:
+            score += 1.0
+
+    if series and series in page_n:
+        score += 0.7
+
+    if any(h in title_n for h in STRONG_MODEL_HINTS):
+        score += 0.8
+
+    # Penalización si el título es demasiado genérico
+    useful_title_words = [w for w in title_n.split() if w not in GENERIC_WORDS and w not in NOISE_WORDS]
+    if len(useful_title_words) < 2:
+        score -= 1.4
 
     return round(score, 4)
+
+
+def is_confident_match(
+    best_detail: Dict[str, Any],
+    signals: Dict[str, Any]
+) -> bool:
+    title_n = normalize_text(best_detail.get("name", ""))
+    page_n = normalize_text(best_detail.get("pageText", ""))
+    probable_name = normalize_text(signals.get("probableName", ""))
+    terms = signals.get("terms", [])
+    fractions = signals.get("fractions", [])
+    score = float(best_detail.get("score", 0.0))
+
+    useful_title_words = [w for w in title_n.split() if w not in GENERIC_WORDS and w not in NOISE_WORDS]
+    useful_term_hits = sum(1 for t in terms[:8] if t in title_n or t in page_n)
+    fraction_hit = any(f in title_n or f in page_n for f in fractions[:3])
+    probable_hit = bool(probable_name and (similarity(probable_name, title_n) >= 0.55 or probable_name in title_n))
+    strong_hint_hit = any(h in title_n for h in STRONG_MODEL_HINTS)
+
+    conditions_met = 0
+    if score >= 3.6:
+        conditions_met += 1
+    if len(useful_title_words) >= 2:
+        conditions_met += 1
+    if useful_term_hits >= 2:
+        conditions_met += 1
+    if fraction_hit:
+        conditions_met += 1
+    if probable_hit:
+        conditions_met += 1
+    if strong_hint_hit:
+        conditions_met += 1
+
+    # Debe cumplir una base mínima real
+    if score < 3.2:
+        return False
+
+    return conditions_met >= 3
 
 
 def fetch_wiki_candidate_details(result_item: Dict[str, str]) -> Optional[Dict[str, Any]]:
@@ -471,11 +604,17 @@ def fetch_wiki_candidate_details(result_item: Dict[str, str]) -> Optional[Dict[s
 
 def find_best_wiki_match(ocr_text: str) -> Dict[str, Any]:
     signals = extract_signal_pack(ocr_text)
-    query = build_search_query(signals)
-    search_results = search_wiki(query)
+    queries = build_search_queries(signals)
 
-    if not search_results:
+    all_search_results: List[Dict[str, str]] = []
+    for query in queries[:4]:
+        all_search_results.extend(search_wiki(query))
+
+    all_search_results = unique_result_list(all_search_results)
+
+    if not all_search_results:
         return {
+            "acceptedMatch": False,
             "topMatch": None,
             "matches": [],
             "message": build_no_match_message(signals, "Sin resultados en wiki.")
@@ -485,19 +624,25 @@ def find_best_wiki_match(ocr_text: str) -> Dict[str, Any]:
     probable_name = signals.get("probableName", "")
     terms = signals.get("terms", [])
     joined_text = signals.get("joinedText", "")
+    fractions = signals.get("fractions", [])
+    series = signals.get("series", "")
 
-    for item in search_results[:6]:
+    for item in all_search_results[:8]:
         detail = fetch_wiki_candidate_details(item)
         if not detail:
             continue
 
+        best_query = queries[0] if queries else "HOT WHEELS"
+
         score = score_wiki_candidate(
             title=detail["name"],
             page_text=detail["pageText"],
-            query=query,
+            query=best_query,
             joined_text=joined_text,
             probable_name=probable_name,
-            terms=terms
+            terms=terms,
+            fractions=fractions,
+            series=series
         )
 
         detail["score"] = score
@@ -505,6 +650,7 @@ def find_best_wiki_match(ocr_text: str) -> Dict[str, Any]:
 
     if not candidates:
         return {
+            "acceptedMatch": False,
             "topMatch": None,
             "matches": [],
             "message": build_no_match_message(signals, "No se pudo validar ninguna página.")
@@ -512,44 +658,57 @@ def find_best_wiki_match(ocr_text: str) -> Dict[str, Any]:
 
     candidates.sort(key=lambda x: x["score"], reverse=True)
     best = candidates[0]
+    accepted = is_confident_match(best, signals)
 
-    similarity_value = max(0.30, min(0.98, 0.35 + (best["score"] / 6.0)))
+    similarity_value = max(0.30, min(0.98, 0.32 + (best["score"] / 6.0)))
 
     top_match = {
-        "name": best["name"],
+        "name": best["name"] if accepted else "",
         "similarity": round(similarity_value, 2),
-        "type": best["type"],
-        "rarity": best["rarity"],
-        "priceRange": best["priceRange"],
+        "type": best["type"] if accepted else "Por validar",
+        "rarity": best["rarity"] if accepted else "Por validar",
+        "priceRange": best["priceRange"] if accepted else "Sin información",
     }
 
-    msg_parts = [
-        "Match wiki general.",
-        f"Query: {query}",
-        f"Score: {best['score']}",
-    ]
+    if accepted:
+        msg_parts = [
+            "Match wiki validado.",
+            f"Queries usadas: {', '.join(queries[:3])}",
+            f"Score: {best['score']}",
+        ]
 
-    if best.get("extra"):
-        msg_parts.append(best["extra"])
+        if best.get("extra"):
+            msg_parts.append(best["extra"])
 
-    if signals.get("probableName"):
-        msg_parts.append(f"Nombre probable OCR: {signals['probableName']}")
+        if signals.get("series"):
+            msg_parts.append(f"Serie detectada: {signals['series']}")
 
-    if signals.get("cleanLines"):
-        msg_parts.append("OCR detectado:\n" + "\n".join(signals["cleanLines"][:18]))
+        if signals.get("fractions"):
+            msg_parts.append(f"Fracciones detectadas: {', '.join(signals['fractions'])}")
+
+        if signals.get("cleanLines"):
+            msg_parts.append("OCR detectado:\n" + "\n".join(signals["cleanLines"][:15]))
+
+        return {
+            "acceptedMatch": True,
+            "topMatch": top_match,
+            "matches": [top_match],
+            "message": "\n\n".join(msg_parts)
+        }
 
     return {
-        "topMatch": top_match,
-        "matches": [top_match],
-        "message": "\n\n".join(msg_parts)
+        "acceptedMatch": False,
+        "topMatch": None,
+        "matches": [],
+        "message": build_no_match_message(
+            signals,
+            f"Sin coincidencia confiable. Mejor score encontrado: {best['score']} | Mejor título: {best['name']}"
+        )
     }
 
 
 def build_no_match_message(signals: Dict[str, Any], reason: str) -> str:
     parts = [reason]
-
-    if signals.get("probableName"):
-        parts.append(f"Nombre probable: {signals['probableName']}")
 
     if signals.get("series"):
         parts.append(f"Serie detectada: {signals['series']}")
@@ -560,9 +719,16 @@ def build_no_match_message(signals: Dict[str, Any], reason: str) -> str:
     if signals.get("fractions"):
         parts.append(f"Fracciones detectadas: {', '.join(signals['fractions'])}")
 
+    useful_terms = signals.get("terms", [])
+    if useful_terms:
+        parts.append(f"Términos útiles: {', '.join(useful_terms[:8])}")
+
+    if signals.get("probableName"):
+        parts.append(f"Nombre probable OCR: {signals['probableName']}")
+
     clean_lines = signals.get("cleanLines", [])
     if clean_lines:
-        parts.append("OCR detectado:\n" + "\n".join(clean_lines[:20]))
+        parts.append("OCR detectado:\n" + "\n".join(clean_lines[:15]))
 
     return "\n\n".join(parts)
 
@@ -617,11 +783,10 @@ async def match_hotwheel(
         width, height = img.size
 
         wiki_result = find_best_wiki_match(ocr_text)
+        visual = visual_signals(img)
 
-        if wiki_result.get("topMatch") is not None:
+        if wiki_result.get("acceptedMatch") and wiki_result.get("topMatch") is not None:
             message = wiki_result.get("message", "")
-            visual = visual_signals(img)
-
             final_message = (
                 f"{message}\n\n"
                 f"Imagen: {width}x{height}\n"
@@ -629,12 +794,12 @@ async def match_hotwheel(
             ).strip()
 
             return {
+                "acceptedMatch": True,
                 "topMatch": wiki_result["topMatch"],
                 "matches": wiki_result.get("matches", []),
                 "message": final_message
             }
 
-        visual = visual_signals(img)
         fallback_message = (
             f"{wiki_result.get('message', 'Sin match online.')}\n\n"
             f"Imagen: {width}x{height}\n"
@@ -642,6 +807,7 @@ async def match_hotwheel(
         ).strip()
 
         return {
+            "acceptedMatch": False,
             "topMatch": None,
             "matches": [],
             "message": fallback_message
@@ -649,6 +815,7 @@ async def match_hotwheel(
 
     except Exception as e:
         return {
+            "acceptedMatch": False,
             "topMatch": None,
             "matches": [],
             "message": f"Error procesando imagen: {str(e)}"
