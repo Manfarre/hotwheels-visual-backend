@@ -17,7 +17,7 @@ app.add_middleware(
 CATALOG = [
     {
         "name": "Batmobile",
-        "keywords": ["BATMOBILE", "BATMAOBILE", "BATMAN", "181/250", "2021", "FOR LIFE"],
+        "keywords": ["BATMOBILE", "BATMAOBILE", "BATMAN", "181/250", "2021", "FOR LIFE", "DC"],
         "type": "Mainline",
         "rarity": "Media",
         "priceRange": "$100 - $260 MXN",
@@ -73,7 +73,6 @@ def keyword_score(keyword: str, normalized_text: str, tokens: list[str]) -> floa
         best_part_scores.append(part_best)
 
     avg_score = sum(best_part_scores) / len(best_part_scores)
-
     if avg_score >= 0.84:
         return avg_score
     return 0.0
@@ -105,6 +104,92 @@ def find_best_match(ocr_text: str):
             }
 
     return best_item, best_score, normalized, best_debug
+
+def average_rgb(img: Image.Image):
+    small = img.resize((80, 80))
+    pixels = list(small.getdata())
+    total = len(pixels)
+
+    r = sum(p[0] for p in pixels) / total
+    g = sum(p[1] for p in pixels) / total
+    b = sum(p[2] for p in pixels) / total
+    return r, g, b
+
+def color_ratio(img: Image.Image, predicate):
+    small = img.resize((100, 100))
+    pixels = list(small.getdata())
+    if not pixels:
+        return 0.0
+    count = sum(1 for p in pixels if predicate(p[0], p[1], p[2]))
+    return count / len(pixels)
+
+def visual_fallback(img: Image.Image):
+    width, height = img.size
+
+    top_half = img.crop((0, 0, width, int(height * 0.55)))
+    center_band = img.crop((int(width * 0.15), int(height * 0.15), int(width * 0.85), int(height * 0.60)))
+
+    blue_ratio_top = color_ratio(
+        top_half,
+        lambda r, g, b: b > 110 and b > r + 20 and b > g + 10
+    )
+    dark_ratio_top = color_ratio(
+        top_half,
+        lambda r, g, b: r < 70 and g < 70 and b < 90
+    )
+    red_ratio_top = color_ratio(
+        top_half,
+        lambda r, g, b: r > 120 and r > g + 25 and r > b + 25
+    )
+    yellow_ratio_top = color_ratio(
+        top_half,
+        lambda r, g, b: r > 150 and g > 120 and b < 120
+    )
+
+    dark_ratio_center = color_ratio(
+        center_band,
+        lambda r, g, b: r < 95 and g < 95 and b < 95
+    )
+    blue_ratio_center = color_ratio(
+        center_band,
+        lambda r, g, b: b > 100 and b > r + 15 and b > g + 10
+    )
+
+    # Batmobile DC/Batman style card:
+    # mucho azul + bastante negro + centro oscuro/azulado
+    if blue_ratio_top >= 0.22 and dark_ratio_top >= 0.18 and (dark_ratio_center >= 0.20 or blue_ratio_center >= 0.18):
+        return {
+            "name": "Batmobile",
+            "similarity": 0.66,
+            "type": "Mainline",
+            "rarity": "Media",
+            "priceRange": "$100 - $260 MXN",
+            "debug": {
+                "reason": "fallback_visual_batmobile",
+                "blue_ratio_top": round(blue_ratio_top, 2),
+                "dark_ratio_top": round(dark_ratio_top, 2),
+                "dark_ratio_center": round(dark_ratio_center, 2),
+                "blue_ratio_center": round(blue_ratio_center, 2),
+            }
+        }
+
+    # Beetle card genérico: azul fuerte + acentos rojos/amarillos
+    if blue_ratio_top >= 0.24 and (red_ratio_top >= 0.12 or yellow_ratio_top >= 0.10):
+        return {
+            "name": "Volkswagen Beetle",
+            "similarity": 0.58,
+            "type": "Mainline",
+            "rarity": "Media",
+            "priceRange": "$100 - $220 MXN",
+            "debug": {
+                "reason": "fallback_visual_beetle",
+                "blue_ratio_top": round(blue_ratio_top, 2),
+                "red_ratio_top": round(red_ratio_top, 2),
+                "yellow_ratio_top": round(yellow_ratio_top, 2),
+            }
+        }
+
+    return None
 
 @app.get("/")
 def root():
@@ -146,13 +231,34 @@ async def match_hotwheel(
                 )
             }
 
+        fallback = visual_fallback(img)
+        if fallback:
+            top_match = {
+                "name": fallback["name"],
+                "similarity": fallback["similarity"],
+                "type": fallback["type"],
+                "rarity": fallback["rarity"],
+                "priceRange": fallback["priceRange"],
+            }
+
+            return {
+                "topMatch": top_match,
+                "matches": [top_match],
+                "message": (
+                    f"Match por fallback visual. "
+                    f"Imagen: {width}x{height}. "
+                    f"Debug: {fallback['debug']}. "
+                    f"Texto OCR: {normalized_text}"
+                )
+            }
+
         return {
             "topMatch": None,
             "matches": [],
             "message": (
                 f"No hubo coincidencia en backend. "
                 f"Imagen: {width}x{height}. "
-                f"Score: {round(best_score, 2)}. "
+                f"Score OCR: {round(best_score, 2)}. "
                 f"Texto: {normalized_text}"
             )
         }
