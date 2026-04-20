@@ -204,11 +204,6 @@ def looks_like_good_phrase(phrase: str) -> bool:
 
 
 def infer_probable_name(joined_text: str) -> str:
-    """
-    General, sin catálogo fijo.
-    Solo intenta sacar una frase probable del OCR limpio.
-    Si no hay señal suficiente, devuelve vacío.
-    """
     text = normalize_text(joined_text)
     if not text:
         return ""
@@ -251,7 +246,6 @@ def infer_probable_name(joined_text: str) -> str:
         if any(w in NOISE_WORDS for w in words):
             score -= 2.0
 
-        # Prefiere frases con más letras reales
         letters = sum(1 for ch in phrase if ch.isalpha())
         score += min(1.2, letters / 20.0)
 
@@ -260,7 +254,6 @@ def infer_probable_name(joined_text: str) -> str:
     scored.sort(key=lambda x: x[1], reverse=True)
     best_phrase, best_score = scored[0]
 
-    # Umbral más alto para no inventar
     if best_score < 3.2:
         return ""
 
@@ -520,7 +513,6 @@ def score_wiki_candidate(
     if any(h in title_n for h in STRONG_MODEL_HINTS):
         score += 0.8
 
-    # Penalización si el título es demasiado genérico
     useful_title_words = [w for w in title_n.split() if w not in GENERIC_WORDS and w not in NOISE_WORDS]
     if len(useful_title_words) < 2:
         score -= 1.4
@@ -559,7 +551,6 @@ def is_confident_match(
     if strong_hint_hit:
         conditions_met += 1
 
-    # Debe cumplir una base mínima real
     if score < 3.2:
         return False
 
@@ -765,13 +756,42 @@ def visual_signals(img: Image.Image) -> Dict[str, float]:
 
 
 # --------------------------------------------------
-# API
+# RUTAS EXTRA PARA EBAY
 # --------------------------------------------------
 @app.get("/")
 def root():
     return {"message": "Hot Wheels visual backend general activo"}
 
 
+@app.get("/privacy")
+def privacy():
+    return {
+        "app": "Business Technology Hot Wheels Scanner",
+        "message": "Esta aplicación no almacena datos personales de usuarios de eBay. Solo utiliza información pública y señales visuales para análisis e identificación de artículos coleccionables."
+    }
+
+
+@app.get("/ebay/callback")
+def ebay_callback(code: str = "", state: str = ""):
+    return {
+        "ok": True,
+        "message": "Autorización recibida",
+        "code": code,
+        "state": state
+    }
+
+
+@app.get("/ebay/cancel")
+def ebay_cancel():
+    return {
+        "ok": False,
+        "message": "El usuario canceló la autorización"
+    }
+
+
+# --------------------------------------------------
+# API PRINCIPAL
+# --------------------------------------------------
 @app.post("/match")
 async def match_hotwheel(
     image: UploadFile = File(...),
