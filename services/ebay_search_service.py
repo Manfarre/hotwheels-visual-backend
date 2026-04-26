@@ -2,8 +2,8 @@ from typing import Any, Dict, List
 
 import requests
 
-from app.config import settings
-from app.services.ebay_token_service import get_application_token
+from config import settings
+from services.ebay_token_service import get_application_token
 
 
 def get_browse_search_url() -> str:
