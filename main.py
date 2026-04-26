@@ -1,10 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routes.health import router as health_router
-from app.routes.match import router as match_router
-from app.routes.ebay_auth import router as ebay_auth_router
-from app.routes.ebay_tools import router as ebay_tools_router
+from routes.health import router as health_router
+from routes.match import router as match_router
+from routes.ebay_auth import router as ebay_auth_router
+from routes.ebay_tools import router as ebay_tools_router
 
 app = FastAPI(title="Hot Wheels Visual Backend")
 
