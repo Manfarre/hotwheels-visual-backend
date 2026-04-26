@@ -1,5 +1,6 @@
 import re
 from difflib import SequenceMatcher
+from io import BytesIO
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urljoin
 
@@ -600,3 +601,51 @@ def visual_signals(img: Image.Image) -> Dict[str, float]:
         "yellowRatio": round(yellow_ratio, 3),
         "darkRatio": round(dark_ratio, 3),
     }
+
+
+# --------------------------------------------------
+# FUNCIÓN PRINCIPAL PARA ROUTES/MATCH.PY
+# --------------------------------------------------
+async def process_match(file) -> Dict[str, Any]:
+    """
+    Función principal usada por src/routes/match.py.
+
+    Recibe una imagen enviada desde FastAPI, intenta leerla,
+    extrae señales visuales y, si existe OCR disponible,
+    busca coincidencias en la wiki de Hot Wheels.
+    """
+
+    content = await file.read()
+
+    try:
+        img = Image.open(BytesIO(content)).convert("RGB")
+    except Exception as e:
+        return {
+            "topMatch": None,
+            "matches": [],
+            "visualSignals": {},
+            "message": f"No se pudo procesar la imagen: {str(e)}"
+        }
+
+    visual = visual_signals(img)
+
+    ocr_text = ""
+
+    try:
+        import pytesseract
+        ocr_text = pytesseract.image_to_string(img)
+    except Exception:
+        ocr_text = ""
+
+    result = find_best_wiki_match(ocr_text)
+    result["visualSignals"] = visual
+
+    if not ocr_text:
+        result["message"] = (
+            "La imagen fue procesada correctamente, pero no se pudo extraer texto OCR. "
+            "El backend ya debería iniciar sin error. Para mejores resultados, sube una imagen "
+            "donde se vea claro el texto del empaque o activa OCR en el servidor.\n\n"
+            + result.get("message", "")
+        )
+
+    return result
