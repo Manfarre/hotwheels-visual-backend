@@ -3,7 +3,7 @@ from typing import Any, Dict
 
 import requests
 
-from app.config import settings
+from config import settings
 
 
 def get_ebay_token_url() -> str:
