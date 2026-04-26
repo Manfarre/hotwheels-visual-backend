@@ -1,6 +1,6 @@
 from fastapi import APIRouter, File, Form, UploadFile
 
-from app.services.match_service import process_match
+from services.match_service import process_match
 
 router = APIRouter()
 
