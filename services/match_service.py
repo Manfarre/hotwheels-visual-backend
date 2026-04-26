@@ -16,9 +16,6 @@ WIKI_BASE = "https://hotwheels.fandom.com"
 WIKI_SEARCH_URL = f"{WIKI_BASE}/wiki/Special:Search?query="
 
 
-# --------------------------------------------------
-# UTILIDADES BÁSICAS
-# --------------------------------------------------
 def normalize_text(text: str) -> str:
     if not text:
         return ""
@@ -58,9 +55,6 @@ def safe_get(url: str, timeout: int = 20) -> Optional[requests.Response]:
         return None
 
 
-# --------------------------------------------------
-# OCR LIMPIO Y SEÑALES
-# --------------------------------------------------
 def clean_ocr_lines(ocr_text: str) -> List[str]:
     lines_raw = re.split(r"[\n\r]+", ocr_text or "")
     blocked_patterns = [
@@ -76,7 +70,6 @@ def clean_ocr_lines(ocr_text: str) -> List[str]:
         line = normalize_text(line)
         if not line:
             continue
-
         if len(line) <= 1:
             continue
 
@@ -273,9 +266,6 @@ def build_search_query(signals: Dict[str, Any]) -> str:
     return " ".join(unique_keep_order(parts)).strip()
 
 
-# --------------------------------------------------
-# WIKI SEARCH
-# --------------------------------------------------
 def unique_result_list(items: List[Dict[str, str]]) -> List[Dict[str, str]]:
     seen = set()
     out = []
@@ -577,9 +567,6 @@ def find_best_wiki_match(ocr_text: str) -> Dict[str, Any]:
     }
 
 
-# --------------------------------------------------
-# SEÑALES VISUALES GENERALES
-# --------------------------------------------------
 def color_ratio(img: Image.Image, predicate) -> float:
     small = img.resize((100, 100))
     pixels = list(small.getdata())
@@ -608,9 +595,6 @@ def visual_signals(img: Image.Image) -> Dict[str, float]:
     }
 
 
-# --------------------------------------------------
-# FUNCIÓN PRINCIPAL PARA ROUTES/MATCH.PY
-# --------------------------------------------------
 async def process_match(file) -> Dict[str, Any]:
     content = await file.read()
 
