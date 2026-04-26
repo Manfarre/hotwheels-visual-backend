@@ -8,7 +8,12 @@ import requests
 from bs4 import BeautifulSoup
 from PIL import Image
 
-from config import HEADERS, WIKI_BASE, WIKI_SEARCH_URL
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36"
+}
+
+WIKI_BASE = "https://hotwheels.fandom.com"
+WIKI_SEARCH_URL = f"{WIKI_BASE}/wiki/Special:Search?query="
 
 
 # --------------------------------------------------
@@ -607,14 +612,6 @@ def visual_signals(img: Image.Image) -> Dict[str, float]:
 # FUNCIÓN PRINCIPAL PARA ROUTES/MATCH.PY
 # --------------------------------------------------
 async def process_match(file) -> Dict[str, Any]:
-    """
-    Función principal usada por src/routes/match.py.
-
-    Recibe una imagen enviada desde FastAPI, intenta leerla,
-    extrae señales visuales y, si existe OCR disponible,
-    busca coincidencias en la wiki de Hot Wheels.
-    """
-
     content = await file.read()
 
     try:
