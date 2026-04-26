@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Query
 
-from app.services.ebay_search_service import search_ebay_items
-from app.services.ebay_token_service import get_application_token
+from services.ebay_search_service import search_ebay_items
+from services.ebay_token_service import get_application_token
 
 router = APIRouter(prefix="/api/ebay", tags=["eBay Tools"])
 
