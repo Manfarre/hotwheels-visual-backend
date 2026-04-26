@@ -1,32 +1,29 @@
 import base64
-from typing import Dict, Any
+from typing import Any, Dict
 
 import requests
 
-from config import (
-    EBAY_APP_CLIENT_ID,
-    EBAY_CERT_ID,
-    EBAY_RUNAME,
-    EBAY_ENV,
-)
+from app.config import settings
 
 
-def _get_token_url() -> str:
-    return (
-        "https://api.sandbox.ebay.com/identity/v1/oauth2/token"
-        if EBAY_ENV.lower() == "sandbox"
-        else "https://api.ebay.com/identity/v1/oauth2/token"
-    )
+def get_ebay_token_url() -> str:
+    if settings.EBAY_ENV.lower() == "production":
+        return "https://api.ebay.com/identity/v1/oauth2/token"
+    return "https://api.sandbox.ebay.com/identity/v1/oauth2/token"
 
 
-def exchange_code_for_token(code: str) -> Dict[str, Any]:
-    if not EBAY_APP_CLIENT_ID or not EBAY_CERT_ID or not EBAY_RUNAME:
+def get_ebay_scope() -> str:
+    return "https://api.ebay.com/oauth/api_scope"
+
+
+def get_application_token() -> Dict[str, Any]:
+    if not settings.EBAY_CLIENT_ID or not settings.EBAY_CLIENT_SECRET:
         return {
             "success": False,
-            "message": "Faltan variables de entorno de eBay"
+            "message": "Faltan EBAY_CLIENT_ID o EBAY_CLIENT_SECRET"
         }
 
-    raw = f"{EBAY_APP_CLIENT_ID}:{EBAY_CERT_ID}"
+    raw = f"{settings.EBAY_CLIENT_ID}:{settings.EBAY_CLIENT_SECRET}"
     encoded = base64.b64encode(raw.encode()).decode()
 
     headers = {
@@ -35,29 +32,32 @@ def exchange_code_for_token(code: str) -> Dict[str, Any]:
     }
 
     data = {
-        "grant_type": "authorization_code",
-        "code": code,
-        "redirect_uri": EBAY_RUNAME,
+        "grant_type": "client_credentials",
+        "scope": get_ebay_scope(),
     }
 
     try:
-        response = requests.post(_get_token_url(), headers=headers, data=data, timeout=30)
-        text = response.text
+        response = requests.post(
+            get_ebay_token_url(),
+            headers=headers,
+            data=data,
+            timeout=30
+        )
 
-        if response.status_code not in (200, 201):
+        if response.status_code != 200:
             return {
                 "success": False,
-                "message": text
+                "message": response.text
             }
 
-        json_data = response.json()
+        payload = response.json()
 
         return {
             "success": True,
-            "access_token": json_data.get("access_token", ""),
-            "refresh_token": json_data.get("refresh_token", ""),
-            "expires_in": json_data.get("expires_in"),
-            "raw": json_data
+            "access_token": payload.get("access_token", ""),
+            "expires_in": payload.get("expires_in", 0),
+            "token_type": payload.get("token_type", ""),
+            "raw": payload,
         }
 
     except Exception as e:
