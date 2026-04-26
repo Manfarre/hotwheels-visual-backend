@@ -329,4 +329,274 @@ def search_wiki(query: str) -> List[Dict[str, str]]:
     return parse_search_results(r.text)
 
 
-def
+def page_visible_text(soup: BeautifulSoup) -> str:
+    blocks = []
+    for selector in [
+        ".portable-infobox",
+        ".mw-parser-output",
+        "article",
+        "main",
+        "body",
+    ]:
+        node = soup.select_one(selector)
+        if node:
+            blocks.append(node.get_text(" ", strip=True))
+
+    return normalize_text(" ".join(blocks))
+
+
+def parse_infobox_value(soup: BeautifulSoup, labels: List[str]) -> str:
+    wanted = [normalize_text(x) for x in labels]
+
+    for row in soup.select(".portable-infobox .pi-item, .infobox tr"):
+        row_text = normalize_text(row.get_text(" ", strip=True))
+        for label in wanted:
+            if label in row_text:
+                text = row.get_text(" ", strip=True)
+                text = re.sub(r"\s+", " ", text).strip()
+                return text
+
+    return ""
+
+
+def infer_type_from_page_text(text: str) -> str:
+    t = normalize_text(text)
+    if "RLC" in t or "RED LINE CLUB" in t:
+        return "RLC"
+    if "PREMIUM" in t:
+        return "Premium"
+    if "MAINLINE" in t:
+        return "Mainline"
+    if "CLASSICS" in t:
+        return "Classics"
+    return "Por validar"
+
+
+def infer_rarity_from_page_text(text: str) -> str:
+    t = normalize_text(text)
+    if "SUPER TREASURE HUNT" in t:
+        return "Muy alta"
+    if "TREASURE HUNT" in t:
+        return "Alta"
+    if "RLC" in t or "RED LINE CLUB" in t:
+        return "Alta"
+    if "PREMIUM" in t:
+        return "Media-alta"
+    return "Por validar"
+
+
+def infer_price_placeholder(page_text: str) -> str:
+    if "RLC" in page_text or "RED LINE CLUB" in page_text:
+        return "Consultar mercado"
+    if "PREMIUM" in page_text:
+        return "Consultar mercado"
+    return "Sin información"
+
+
+def score_wiki_candidate(
+    title: str,
+    page_text: str,
+    query: str,
+    joined_text: str,
+    probable_name: str,
+    terms: List[str]
+) -> float:
+    title_n = normalize_text(title)
+    page_n = normalize_text(page_text)
+    query_n = normalize_text(query)
+    joined_n = normalize_text(joined_text)
+
+    score = 0.0
+    score += similarity(title_n, query_n) * 2.5
+    score += similarity(title_n, joined_n) * 1.6
+
+    if probable_name:
+        score += similarity(title_n, probable_name) * 2.8
+        if probable_name in title_n:
+            score += 1.4
+
+    for term in terms[:8]:
+        if term in title_n:
+            score += 0.55
+        elif term in page_n:
+            score += 0.20
+
+    if title_n in joined_n:
+        score += 1.0
+
+    return round(score, 4)
+
+
+def fetch_wiki_candidate_details(result_item: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    r = safe_get(result_item["url"])
+    if not r:
+        return None
+
+    soup = BeautifulSoup(r.text, "html.parser")
+    visible_text = page_visible_text(soup)
+
+    name = result_item["title"].strip()
+    type_value = infer_type_from_page_text(visible_text)
+    rarity_value = infer_rarity_from_page_text(visible_text)
+    price_range = infer_price_placeholder(visible_text)
+
+    year_info = parse_infobox_value(soup, ["YEAR", "RELEASE YEAR", "FIRST RELEASE"])
+    country_info = parse_infobox_value(soup, ["COUNTRY"])
+    wheel_info = parse_infobox_value(soup, ["WHEEL TYPE", "WHEELS"])
+
+    extra_bits = []
+    if year_info:
+        extra_bits.append(f"Año: {year_info}")
+    if country_info:
+        extra_bits.append(f"País: {country_info}")
+    if wheel_info:
+        extra_bits.append(f"Rueda: {wheel_info}")
+
+    return {
+        "name": name,
+        "type": type_value,
+        "rarity": rarity_value,
+        "priceRange": price_range,
+        "pageText": visible_text,
+        "extra": " | ".join(extra_bits),
+        "url": result_item["url"],
+    }
+
+
+def build_no_match_message(signals: Dict[str, Any], reason: str) -> str:
+    parts = [reason]
+
+    if signals.get("series"):
+        parts.append(f"Serie detectada: {signals['series']}")
+
+    if signals.get("terms"):
+        parts.append(f"Términos útiles: {', '.join(signals['terms'][:8])}")
+
+    if signals.get("probableName"):
+        parts.append(f"Nombre probable OCR: {signals['probableName']}")
+
+    clean_lines = signals.get("cleanLines", [])
+    if clean_lines:
+        parts.append("OCR detectado:\n" + "\n".join(clean_lines[:12]))
+
+    return "\n\n".join(parts)
+
+
+def find_best_wiki_match(ocr_text: str) -> Dict[str, Any]:
+    signals = extract_signal_pack(ocr_text)
+    query = build_search_query(signals)
+    search_results = search_wiki(query)
+
+    if not search_results:
+        return {
+            "topMatch": None,
+            "matches": [],
+            "message": build_no_match_message(signals, "Sin resultados en wiki.")
+        }
+
+    candidates = []
+    probable_name = signals.get("probableName", "")
+    terms = signals.get("terms", [])
+    joined_text = signals.get("joinedText", "")
+
+    for item in search_results[:6]:
+        detail = fetch_wiki_candidate_details(item)
+        if not detail:
+            continue
+
+        score = score_wiki_candidate(
+            title=detail["name"],
+            page_text=detail["pageText"],
+            query=query,
+            joined_text=joined_text,
+            probable_name=probable_name,
+            terms=terms
+        )
+
+        detail["score"] = score
+        candidates.append(detail)
+
+    if not candidates:
+        return {
+            "topMatch": None,
+            "matches": [],
+            "message": build_no_match_message(signals, "No se pudo validar ninguna página.")
+        }
+
+    candidates.sort(key=lambda x: x["score"], reverse=True)
+    best = candidates[0]
+
+    if best["score"] < 2.2:
+        return {
+            "topMatch": None,
+            "matches": [],
+            "message": build_no_match_message(signals, "No identificado con confianza.")
+        }
+
+    similarity_value = max(0.30, min(0.98, 0.35 + (best["score"] / 6.0)))
+
+    top_match = {
+        "name": best["name"],
+        "similarity": round(similarity_value, 2),
+        "type": best["type"],
+        "rarity": best["rarity"],
+        "priceRange": best["priceRange"],
+    }
+
+    msg_parts = [
+        "Match wiki general.",
+        f"Query: {query}",
+        f"Score: {best['score']}",
+    ]
+
+    if best.get("extra"):
+        msg_parts.append(best["extra"])
+
+    if signals.get("series"):
+        msg_parts.append(f"Serie detectada: {signals['series']}")
+
+    if signals.get("fractions"):
+        msg_parts.append(f"Fracciones detectadas: {', '.join(signals['fractions'][:3])}")
+
+    if signals.get("probableName"):
+        msg_parts.append(f"Nombre probable OCR: {signals['probableName']}")
+
+    if signals.get("cleanLines"):
+        msg_parts.append("OCR detectado:\n" + "\n".join(signals["cleanLines"][:12]))
+
+    return {
+        "topMatch": top_match,
+        "matches": [top_match],
+        "message": "\n\n".join(msg_parts)
+    }
+
+
+# --------------------------------------------------
+# SEÑALES VISUALES GENERALES
+# --------------------------------------------------
+def color_ratio(img: Image.Image, predicate) -> float:
+    small = img.resize((100, 100))
+    pixels = list(small.getdata())
+    if not pixels:
+        return 0.0
+    count = sum(1 for p in pixels if predicate(p[0], p[1], p[2]))
+    return count / len(pixels)
+
+
+def visual_signals(img: Image.Image) -> Dict[str, float]:
+    width, height = img.size
+
+    top_half = img.crop((0, 0, width, int(height * 0.55)))
+    center_band = img.crop((int(width * 0.10), int(height * 0.10), int(width * 0.90), int(height * 0.70)))
+
+    red_ratio = color_ratio(top_half, lambda r, g, b: r > 140 and r > g + 35 and r > b + 35)
+    blue_ratio = color_ratio(center_band, lambda r, g, b: b > 110 and b > r + 15 and b > g + 15)
+    yellow_ratio = color_ratio(top_half, lambda r, g, b: r > 150 and g > 120 and b < 130)
+    dark_ratio = color_ratio(center_band, lambda r, g, b: r < 75 and g < 75 and b < 75)
+
+    return {
+        "redRatio": round(red_ratio, 3),
+        "blueRatio": round(blue_ratio, 3),
+        "yellowRatio": round(yellow_ratio, 3),
+        "darkRatio": round(dark_ratio, 3),
+    }
