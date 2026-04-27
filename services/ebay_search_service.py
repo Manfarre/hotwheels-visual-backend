@@ -2,12 +2,12 @@ from typing import Any, Dict, List
 
 import requests
 
-from config import settings
+from config import EBAY_ENV
 from services.ebay_token_service import get_application_token
 
 
 def get_browse_search_url() -> str:
-    if settings.EBAY_ENV.lower() == "production":
+    if EBAY_ENV.lower() == "production":
         return "https://api.ebay.com/buy/browse/v1/item_summary/search"
     return "https://api.sandbox.ebay.com/buy/browse/v1/item_summary/search"
 
