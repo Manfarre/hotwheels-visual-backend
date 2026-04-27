@@ -8,6 +8,61 @@ from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 from services.ebay_search_service import search_ebay_items
 
 
+KNOWN_MODEL_PHRASES = [
+    "CLASSIC TV SERIES BATMOBILE",
+    "BATMAN BEGINS BATMOBILE",
+    "BATMAN BEGINS",
+    "BATMOBILE",
+    "BEACH BOMB TOO",
+    "BEACH BOMB",
+    "CANDY STRIPER",
+    "67 SHELBY GT500",
+    "SHELBY GT500",
+    "CUSTOM VOLKSWAGEN BEETLE",
+    "VOLKSWAGEN BEETLE",
+    "BONE SHAKER",
+    "DRAG BUS",
+    "CAMARO",
+    "MUSTANG",
+    "CHEVY",
+    "FORD",
+    "BEETLE",
+    "CORVETTE",
+    "COBRA",
+    "DODGE",
+    "CHARGER",
+    "CHALLENGER",
+    "PORSCHE",
+    "NISSAN",
+    "HONDA",
+    "TOYOTA",
+    "TESLA",
+]
+
+STRONG_MODEL_TOKENS = {
+    "BATMOBILE", "BATMAN", "BEACH", "BOMB", "TOO", "CANDY", "STRIPER",
+    "SHELBY", "GT500", "CAMARO", "MUSTANG", "CHEVY", "FORD",
+    "BEETLE", "VOLKSWAGEN", "CORVETTE", "PORSCHE", "CHARGER",
+    "CHALLENGER", "COBRA", "BUS", "SHAKER", "CLASSIC", "TV", "BEGINS"
+}
+
+BLOCKED_TOKENS = {
+    "HOT", "WHEELS", "MATTEL", "WARNING", "AGES", "OVER", "NEW",
+    "MODEL", "DIECAST", "METAL", "PLASTIC", "MADE", "THAILAND",
+    "MALAYSIA", "INDONESIA", "CHINA", "COLLECTOR", "COLLECTORS",
+    "SERIES", "ASSORTMENT", "ITEM", "TOY", "TOYS", "CAR", "CARS",
+    "THE", "AND", "WITH", "FOR", "NOT", "USE", "ONLY", "FROM",
+    "THIS", "THAT", "WWW", "HTTP", "HTTPS", "COM", "INC",
+    "FACEBOOK", "TIKTOK", "GOOGLE", "RESULTADOS", "RESULTADO",
+    "COMPARTIR", "GUARDAR", "DERECHOS", "IMAGENES", "IMÁGENES",
+    "MAS", "MÁS", "INFORMACION", "INFORMACIÓN", "ONLINE",
+    "EXCLUSIVE", "LIMITED", "EDITION", "MAINLINE", "PREMIUM",
+    "SCANNER", "ATRAS", "ATRÁS", "PRECIO", "FUENTE", "QUERY",
+    "USED", "OCR", "BACKEND", "CONFIABLE", "COINCIDENCIA",
+    "LIFE", "HOW", "HOR", "HOY", "VIL", "REE"
+}
+
+
 def normalize_text(text: str) -> str:
     if not text:
         return ""
@@ -154,7 +209,7 @@ def extract_ocr_text_by_regions(img: Image.Image) -> str:
     return "\n".join(unique_keep_order(texts))
 
 
-def is_probably_garbage_token(token: str) -> bool:
+def looks_like_garbage(token: str) -> bool:
     t = normalize_text(token)
 
     if len(t) < 3:
@@ -165,53 +220,99 @@ def is_probably_garbage_token(token: str) -> bool:
 
     weird_sequences = [
         "AUAA", "EEE", "SNIR", "ROA", "SLS", "ETSOO", "AOR",
-        "VEELS", "PELS", "PEIS", "NORE", "AMAAT", "SEMML"
+        "VEELS", "PELS", "PEIS", "NORE", "AMAAT", "SEMML",
+        "6888", "EUNEAN", "ASASA", "SEDC", "O82"
     ]
 
     if any(w in t for w in weird_sequences):
         return True
 
-    vowels = sum(1 for ch in t if ch in "AEIOU")
-    if len(t) >= 6 and vowels == 0:
-        return True
+    letters_only = re.sub(r"[^A-Z]", "", t)
+    if len(letters_only) >= 6:
+        vowels = sum(1 for ch in letters_only if ch in "AEIOU")
+        if vowels == 0:
+            return True
 
     return False
 
 
-def clean_tokens_from_ocr(ocr_text: str) -> List[str]:
+def canonicalize_token(token: str) -> str:
+    t = normalize_text(token)
+
+    replacements = {
+        "BEARH": "BEACH",
+        "SEACH": "BEACH",
+        "BEACM": "BEACH",
+        "BEACN": "BEACH",
+        "SACH": "BEACH",
+        "BEACHH": "BEACH",
+
+        "BAM": "BOMB",
+        "BAAD": "BOMB",
+        "BAED": "BOMB",
+        "SAMD": "BOMB",
+        "SAMB": "BOMB",
+        "SAND": "BOMB",
+        "SAED": "BOMB",
+        "BAD": "BOMB",
+        "SAB": "BOMB",
+        "BOMD": "BOMB",
+        "BOMH": "BOMB",
+        "BONB": "BOMB",
+
+        "TEA": "TOO",
+        "FEA": "TOO",
+        "FOO": "TOO",
+        "TED": "TOO",
+        "TO0": "TOO",
+        "100": "TOO",
+
+        "BATNA": "BATMAN",
+        "BATMAM": "BATMAN",
+        "BATMOBILE": "BATMOBILE",
+        "BATMOBLLE": "BATMOBILE",
+        "BATMOB1LE": "BATMOBILE",
+
+        "STRIPFR": "STRIPER",
+        "STRIPR": "STRIPER",
+
+        "GTSOO": "GT500",
+        "GT5OO": "GT500",
+        "GT5O0": "GT500",
+        "GT5000": "GT500",
+
+        "VOLKSWACE": "VOLKSWAGEN",
+        "VOLKSWAGENN": "VOLKSWAGEN",
+
+        "BEETLE": "BEETLE",
+        "BEETLF": "BEETLE",
+    }
+
+    if t in replacements:
+        return replacements[t]
+
+    for target in STRONG_MODEL_TOKENS:
+        if similarity(t, target) >= 0.72:
+            return target
+
+    return t
+
+
+def extract_raw_tokens(ocr_text: str) -> List[str]:
     text = normalize_text(ocr_text)
-    tokens = re.findall(r"[A-Z0-9']{2,}", text)
+    return re.findall(r"[A-Z0-9']{2,}", text)
 
-    blocked = {
-        "HOT", "WHEELS", "MATTEL", "WARNING", "AGES", "OVER", "NEW",
-        "MODEL", "DIECAST", "METAL", "PLASTIC", "MADE", "THAILAND",
-        "MALAYSIA", "INDONESIA", "CHINA", "COLLECTOR", "COLLECTORS",
-        "SERIES", "ASSORTMENT", "ITEM", "TOY", "TOYS", "CAR", "CARS",
-        "THE", "AND", "WITH", "FOR", "NOT", "USE", "ONLY", "FROM",
-        "THIS", "THAT", "WWW", "HTTP", "HTTPS", "COM", "INC",
-        "FACEBOOK", "TIKTOK", "GOOGLE", "RESULTADOS", "RESULTADO",
-        "COMPARTIR", "GUARDAR", "DERECHOS", "IMAGENES", "IMÁGENES",
-        "MAS", "MÁS", "INFORMACION", "INFORMACIÓN", "ONLINE",
-        "EXCLUSIVE", "LIMITED", "EDITION", "MAINLINE", "PREMIUM",
-        "SCANNER", "ATRAS", "ATRÁS", "PRECIO", "FUENTE", "QUERY",
-        "USED", "OCR", "BACKEND", "CONFIABLE", "COINCIDENCIA",
-        "LIFE", "HOW", "HOR", "HOY", "VIL", "REE"
-    }
 
-    whitelist = {
-        "BATMOBILE", "BATMAN", "BEACH", "BOMB", "TOO", "CANDY", "STRIPER",
-        "SHELBY", "GT500", "CAMARO", "MUSTANG", "CHEVY", "FORD",
-        "BEETLE", "VOLKSWAGEN", "CORVETTE", "PORSCHE", "CHARGER",
-        "CHALLENGER", "COBRA", "BUS", "SHAKER", "CLASSIC", "TV", "BEGINS"
-    }
+def clean_tokens_from_ocr(ocr_text: str) -> List[str]:
+    raw_tokens = extract_raw_tokens(ocr_text)
 
     useful: List[str] = []
     seen = set()
 
-    for token in tokens:
-        token = normalize_text(token)
+    for token in raw_tokens:
+        token = canonicalize_token(token)
 
-        if token in blocked:
+        if token in BLOCKED_TOKENS:
             continue
         if token.isdigit():
             continue
@@ -219,8 +320,7 @@ def clean_tokens_from_ocr(ocr_text: str) -> List[str]:
             continue
         if re.fullmatch(r"[0-9/]+", token):
             continue
-
-        if token not in whitelist and is_probably_garbage_token(token):
+        if token not in STRONG_MODEL_TOKENS and looks_like_garbage(token):
             continue
 
         if token not in seen:
@@ -252,68 +352,47 @@ def extract_clean_lines(ocr_text: str) -> List[str]:
     return unique_keep_order(lines)
 
 
-def extract_model_like_lines(ocr_text: str) -> List[str]:
-    lines = extract_clean_lines(ocr_text)
+def normalized_model_lines(ocr_text: str) -> List[str]:
+    normalized_lines = []
 
-    preferred_words = {
-        "BATMOBILE", "BATMAN", "BEACH", "BOMB", "TOO", "CANDY", "STRIPER",
-        "SHELBY", "GT500", "CAMARO", "MUSTANG", "CHEVY", "FORD",
-        "BEETLE", "VOLKSWAGEN", "CORVETTE", "PORSCHE", "CHARGER",
-        "CHALLENGER", "COBRA", "BUS", "SHAKER"
-    }
+    for line in extract_clean_lines(ocr_text):
+        parts = []
+        for token in re.findall(r"[A-Z0-9']{2,}", normalize_text(line)):
+            fixed = canonicalize_token(token)
+            if fixed not in BLOCKED_TOKENS and len(fixed) >= 3:
+                parts.append(fixed)
+
+        if parts:
+            normalized_lines.append(" ".join(parts))
+
+    return unique_keep_order(normalized_lines)
+
+
+def extract_model_like_lines(ocr_text: str) -> List[str]:
+    lines = normalized_model_lines(ocr_text)
 
     good = []
     for line in lines:
-        line_n = normalize_text(line)
-
-        if any(word in line_n for word in preferred_words):
-            good.append(line_n)
+        if any(word in line for word in STRONG_MODEL_TOKENS):
+            good.append(line)
             continue
 
-        if re.search(r"\b\d{2}\b", line_n) and re.search(r"\b[A-Z]{3,}\b", line_n):
-            good.append(line_n)
+        if re.search(r"\b\d{2}\b", line) and re.search(r"\b[A-Z]{3,}\b", line):
+            good.append(line)
 
     return unique_keep_order(good)
 
 
 def infer_model_phrase(ocr_text: str) -> str:
     text = normalize_text(ocr_text)
-    model_lines = extract_model_like_lines(text)
-    tokens = clean_tokens_from_ocr(text)
+    fixed_text = normalize_text(" ".join(clean_tokens_from_ocr(ocr_text)))
+    model_lines = extract_model_like_lines(ocr_text)
+    tokens = clean_tokens_from_ocr(ocr_text)
 
-    known_keywords = [
-        "CLASSIC TV SERIES BATMOBILE",
-        "BATMAN BEGINS BATMOBILE",
-        "BATMAN BEGINS",
-        "BATMOBILE",
-        "BEACH BOMB TOO",
-        "BEACH BOMB",
-        "CANDY STRIPER",
-        "67 SHELBY GT500",
-        "SHELBY GT500",
-        "CUSTOM VOLKSWAGEN BEETLE",
-        "VOLKSWAGEN BEETLE",
-        "BONE SHAKER",
-        "DRAG BUS",
-        "CAMARO",
-        "MUSTANG",
-        "CHEVY",
-        "FORD",
-        "BEETLE",
-        "CORVETTE",
-        "COBRA",
-        "DODGE",
-        "CHARGER",
-        "CHALLENGER",
-        "PORSCHE",
-        "NISSAN",
-        "HONDA",
-        "TOYOTA",
-        "TESLA",
-    ]
+    combined_texts = [text, fixed_text] + model_lines
 
-    for keyword in known_keywords:
-        if keyword in text:
+    for keyword in KNOWN_MODEL_PHRASES:
+        if any(keyword in part for part in combined_texts):
             return keyword
 
     for line in model_lines:
@@ -340,18 +419,20 @@ def infer_model_phrase(ocr_text: str) -> str:
         if "VOLKSWAGEN" in line and "BEETLE" in line:
             return "VOLKSWAGEN BEETLE"
 
-    candidate_tokens = [t for t in tokens if not is_probably_garbage_token(t)]
-
-    if "SHELBY" in candidate_tokens and "GT500" in candidate_tokens:
+    if "SHELBY" in tokens and "GT500" in tokens:
         return "SHELBY GT500"
-    if "CANDY" in candidate_tokens and "STRIPER" in candidate_tokens:
+    if "CANDY" in tokens and "STRIPER" in tokens:
         return "CANDY STRIPER"
-    if "BEACH" in candidate_tokens and "BOMB" in candidate_tokens:
-        return "BEACH BOMB TOO" if "TOO" in candidate_tokens else "BEACH BOMB"
-    if "BATMOBILE" in candidate_tokens:
+    if "BEACH" in tokens and "BOMB" in tokens:
+        return "BEACH BOMB TOO" if "TOO" in tokens else "BEACH BOMB"
+    if "BATMOBILE" in tokens:
         return "BATMOBILE"
-    if "VOLKSWAGEN" in candidate_tokens and "BEETLE" in candidate_tokens:
+    if "BATMAN" in tokens and "BEGINS" in tokens:
+        return "BATMAN BEGINS"
+    if "VOLKSWAGEN" in tokens and "BEETLE" in tokens:
         return "VOLKSWAGEN BEETLE"
+
+    candidate_tokens = [t for t in tokens if not looks_like_garbage(t)]
 
     if len(candidate_tokens) >= 2:
         return " ".join(candidate_tokens[:3])
@@ -386,13 +467,20 @@ def build_queries_from_ocr(ocr_text: str) -> List[str]:
         queries.append("hot wheels BEACH BOMB TOO")
         queries.append("BEACH BOMB TOO")
 
+    if phrase == "BEACH BOMB":
+        queries.append("hot wheels BEACH BOMB")
+
     if phrase == "BATMOBILE" or "BATMOBILE" in phrase:
         queries.append("hot wheels BATMOBILE")
-        if "BATMAN BEGINS" in text:
+        if "BATMAN BEGINS" in text or "BATMAN" in useful_tokens:
             queries.append("BATMAN BEGINS BATMOBILE")
             queries.append("hot wheels BATMAN BEGINS BATMOBILE")
 
-    clean_useful = [t for t in useful_tokens if not is_probably_garbage_token(t)]
+    if phrase == "VOLKSWAGEN BEETLE":
+        queries.append("hot wheels VOLKSWAGEN BEETLE")
+        queries.append("hot wheels BEETLE")
+
+    clean_useful = [t for t in useful_tokens if not looks_like_garbage(t)]
     if clean_useful:
         queries.append(" ".join(clean_useful[:3]))
         queries.append(f"hot wheels {' '.join(clean_useful[:2])}")
@@ -408,14 +496,7 @@ def build_queries_from_ocr(ocr_text: str) -> List[str]:
 
 def strong_ocr_tokens(ocr_text: str) -> List[str]:
     tokens = clean_tokens_from_ocr(ocr_text)
-    preferred = {
-        "BATMOBILE", "BATMAN", "BEACH", "BOMB", "TOO", "CANDY", "STRIPER",
-        "SHELBY", "GT500", "CAMARO", "MUSTANG", "CHEVY", "FORD",
-        "BEETLE", "VOLKSWAGEN", "CORVETTE", "PORSCHE", "CHARGER",
-        "CHALLENGER", "COBRA", "BUS", "SHAKER", "CLASSIC", "TV", "BEGINS"
-    }
-
-    strong = [t for t in tokens if t in preferred]
+    strong = [t for t in tokens if t in STRONG_MODEL_TOKENS]
     return unique_keep_order(strong) if strong else tokens[:5]
 
 
@@ -423,48 +504,49 @@ def score_item_against_query(item: Dict[str, Any], query: str, ocr_text: str) ->
     title = item.get("title", "")
     title_n = normalize_text(title)
     query_n = normalize_text(query)
-    ocr_n = normalize_text(ocr_text)
+    phrase_n = normalize_text(infer_model_phrase(ocr_text))
+    strong_tokens = strong_ocr_tokens(ocr_text)
 
     score = 0.0
-    score += similarity(title_n, query_n) * 3.8
+    score += similarity(title_n, query_n) * 4.2
 
-    if ocr_n:
-        score += similarity(title_n, ocr_n) * 1.0
+    if phrase_n:
+        score += similarity(title_n, phrase_n) * 2.0
 
-    strong_tokens = strong_ocr_tokens(ocr_text)
     matched_strong = 0
-
     for token in strong_tokens[:8]:
         if token in title_n:
-            score += 1.4
+            score += 1.6
             matched_strong += 1
 
     for year in extract_years(ocr_text):
         if year in title_n:
             score += 0.8
 
-    phrase = infer_model_phrase(ocr_text)
-    phrase_n = normalize_text(phrase)
     if phrase_n and phrase_n in title_n:
-        score += 4.5
+        score += 5.0
 
     if strong_tokens and matched_strong == 0:
-        score -= 3.5
+        score -= 4.0
     elif strong_tokens and matched_strong == 1:
-        score -= 0.8
+        score -= 1.0
 
     if "BATMOBILE" in query_n and "BATMOBILE" not in title_n:
-        score -= 5.0
+        score -= 5.5
     if "BATMAN" in query_n and "BATMAN" not in title_n:
-        score -= 3.5
-    if "BEACH BOMB" in query_n and "BEACH" not in title_n and "BOMB" not in title_n:
-        score -= 5.0
+        score -= 4.0
+    if "BEACH BOMB" in query_n and ("BEACH" not in title_n or "BOMB" not in title_n):
+        score -= 5.5
     if "CANDY STRIPER" in query_n and ("CANDY" not in title_n or "STRIPER" not in title_n):
-        score -= 5.0
+        score -= 5.5
     if "BEETLE" in query_n and "BEETLE" not in title_n and "VOLKSWAGEN" not in title_n:
-        score -= 5.0
+        score -= 5.5
     if "CAMARO" in query_n and "CAMARO" not in title_n:
-        score -= 5.0
+        score -= 5.5
+    if "SHELBY" in query_n and "SHELBY" not in title_n:
+        score -= 5.5
+    if "GT500" in query_n and "GT500" not in title_n:
+        score -= 5.5
 
     return round(score, 4)
 
@@ -485,7 +567,7 @@ def choose_top_match(
     scored.sort(key=lambda x: x[1], reverse=True)
     best_item, best_score = scored[0]
 
-    if best_score < 2.8:
+    if best_score < 3.0:
         return None
 
     similarity_value = max(0.30, min(0.98, 0.35 + (best_score / 6.0)))
@@ -507,7 +589,7 @@ def fetch_best_online_match(ocr_text: str) -> Dict[str, Any]:
     all_items: List[Dict[str, Any]] = []
     used_queries: List[str] = []
 
-    for query in queries[:5]:
+    for query in queries[:6]:
         result = search_ebay_items(query=query, limit=8)
         used_queries.append(query)
 
@@ -603,3 +685,4 @@ async def process_match(file) -> Dict[str, Any]:
         },
         "visualSignals": visual,
     }
+}
