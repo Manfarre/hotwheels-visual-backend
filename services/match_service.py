@@ -1,7 +1,24 @@
+import re
 from io import BytesIO
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from PIL import Image
+
+from services.ebay_search_service import search_ebay_items
+
+
+def normalize_text(text: str) -> str:
+    if not text:
+        return ""
+    text = text.upper()
+    text = text.replace("\n", " ")
+    for ch in [",", ".", ":", ";", "_", "(", ")", "[", "]", "{", "}", "'", '"', "|", "•", "·"]:
+        text = text.replace(ch, " ")
+    text = text.replace("/", " / ")
+    text = text.replace("-", " ")
+    while "  " in text:
+        text = text.replace("  ", " ")
+    return text.strip()
 
 
 def color_ratio(img: Image.Image, predicate) -> float:
@@ -46,6 +63,66 @@ def visual_signals(img: Image.Image) -> Dict[str, float]:
     }
 
 
+def extract_ocr_text(img: Image.Image) -> str:
+    try:
+        import pytesseract
+        text = pytesseract.image_to_string(img)
+        return text or ""
+    except Exception:
+        return ""
+
+
+def build_query_from_ocr(ocr_text: str) -> str:
+    text = normalize_text(ocr_text)
+
+    if not text:
+        return "hot wheels"
+
+    tokens = re.findall(r"[A-Z0-9]{3,}", text)
+
+    blocked = {
+        "HOT", "WHEELS", "MATTEL", "WARNING", "AGES", "OVER", "NEW",
+        "MODEL", "DIECAST", "METAL", "PLASTIC", "MADE", "IN", "THAILAND",
+        "MALAYSIA", "INDONESIA", "CHINA", "COLLECTOR", "COLLECTORS",
+        "SERIES", "ASSORTMENT", "ITEM", "TOY", "TOYS"
+    }
+
+    filtered: List[str] = []
+    seen = set()
+
+    for token in tokens:
+        if token in blocked:
+            continue
+        if token.isdigit():
+            continue
+        if len(token) < 3:
+            continue
+        if token not in seen:
+            seen.add(token)
+            filtered.append(token)
+
+    if filtered:
+        return "hot wheels " + " ".join(filtered[:5])
+
+    return "hot wheels"
+
+
+def choose_top_match(items: List[Dict[str, Any]]) -> Dict[str, Any] | None:
+    if not items:
+        return None
+
+    first = items[0]
+
+    return {
+        "name": first.get("title", ""),
+        "price": first.get("price", ""),
+        "url": first.get("itemWebUrl", ""),
+        "image": first.get("image", ""),
+        "condition": first.get("condition", ""),
+        "similarity": 0.65,
+    }
+
+
 async def process_match(file) -> Dict[str, Any]:
     content = await file.read()
 
@@ -62,12 +139,38 @@ async def process_match(file) -> Dict[str, Any]:
 
     width, height = img.size
     visual = visual_signals(img)
+    ocr_text = extract_ocr_text(img)
+    query = build_query_from_ocr(ocr_text)
+
+    ebay_result = search_ebay_items(query=query, limit=5)
+
+    if not ebay_result.get("success"):
+        return {
+            "success": False,
+            "topMatch": None,
+            "matches": [],
+            "message": ebay_result.get("message", "Falló la búsqueda en eBay"),
+            "queryUsed": query,
+            "ocrText": ocr_text[:500],
+            "imageInfo": {
+                "width": width,
+                "height": height,
+                "filename": getattr(file, "filename", ""),
+                "contentType": getattr(file, "content_type", ""),
+            },
+            "visualSignals": visual,
+        }
+
+    items = ebay_result.get("items", [])
+    top_match = choose_top_match(items)
 
     return {
         "success": True,
-        "topMatch": None,
-        "matches": [],
-        "message": "Imagen recibida correctamente. Match básico activo.",
+        "topMatch": top_match,
+        "matches": items,
+        "message": "Match con búsqueda automática en eBay completado.",
+        "queryUsed": query,
+        "ocrText": ocr_text[:500],
         "imageInfo": {
             "width": width,
             "height": height,
