@@ -121,12 +121,9 @@ def preprocess_for_ocr(img: Image.Image) -> List[Image.Image]:
 
 
 def run_tesseract(img: Image.Image, psm: int) -> str:
-    try:
-        import pytesseract
-        config = f"--oem 3 --psm {psm}"
-        return pytesseract.image_to_string(img, config=config) or ""
-    except Exception:
-        return ""
+    import pytesseract
+    config = f"--oem 3 --psm {psm}"
+    return pytesseract.image_to_string(img, config=config) or ""
 
 
 def extract_ocr_text_by_regions(img: Image.Image) -> str:
@@ -225,6 +222,7 @@ def infer_model_phrase(ocr_text: str) -> str:
     known_keywords = [
         "CLASSIC TV SERIES BATMOBILE",
         "BATMOBILE",
+        "BATMAN BEGINS",
         "BEACH BOMB TOO",
         "BEACH BOMB",
         "CANDY STRIPER",
@@ -267,7 +265,7 @@ def infer_model_phrase(ocr_text: str) -> str:
     candidate_phrases = unique_keep_order(candidate_phrases)
 
     preferred_terms = {
-        "BATMOBILE", "BEACH", "BOMB", "CANDY", "STRIPER", "CAMARO",
+        "BATMOBILE", "BATMAN", "BEACH", "BOMB", "CANDY", "STRIPER", "CAMARO",
         "MUSTANG", "CHEVY", "FORD", "BEETLE", "VOLKSWAGEN",
         "CORVETTE", "PORSCHE", "CHARGER", "CHALLENGER", "COBRA",
         "BUS", "SHAKER"
@@ -314,10 +312,10 @@ def build_queries_from_ocr(ocr_text: str) -> List[str]:
 def strong_ocr_tokens(ocr_text: str) -> List[str]:
     tokens = clean_tokens_from_ocr(ocr_text)
     preferred = {
-        "BATMOBILE", "BEACH", "BOMB", "TOO", "CANDY", "STRIPER",
+        "BATMOBILE", "BATMAN", "BEACH", "BOMB", "TOO", "CANDY", "STRIPER",
         "CAMARO", "MUSTANG", "CHEVY", "FORD", "BEETLE", "VOLKSWAGEN",
         "CORVETTE", "PORSCHE", "CHARGER", "CHALLENGER", "COBRA",
-        "BUS", "SHAKER", "CLASSIC", "TV"
+        "BUS", "SHAKER", "CLASSIC", "TV", "BEGINS"
     }
 
     strong = [t for t in tokens if t in preferred]
@@ -360,6 +358,8 @@ def score_item_against_query(item: Dict[str, Any], query: str, ocr_text: str) ->
 
     if "BATMOBILE" in query_n and "BATMOBILE" not in title_n:
         score -= 5.0
+    if "BATMAN" in query_n and "BATMAN" not in title_n:
+        score -= 3.5
     if "BEACH BOMB" in query_n and "BEACH" not in title_n and "BOMB" not in title_n:
         score -= 5.0
     if "CANDY STRIPER" in query_n and ("CANDY" not in title_n or "STRIPER" not in title_n):
@@ -463,11 +463,19 @@ async def process_match(file) -> Dict[str, Any]:
             "matches": [],
             "message": f"No se pudo procesar la imagen: {str(e)}",
             "visualSignals": {},
+            "ocrError": "",
+            "ocrText": "",
         }
 
     width, height = img.size
     visual = visual_signals(img)
-    ocr_text = extract_ocr_text_by_regions(img)
+
+    try:
+        ocr_text = extract_ocr_text_by_regions(img)
+        ocr_error = ""
+    except Exception as e:
+        ocr_text = ""
+        ocr_error = str(e)
 
     online_result = fetch_best_online_match(ocr_text)
     top_match = online_result.get("topMatch")
@@ -487,6 +495,7 @@ async def process_match(file) -> Dict[str, Any]:
         "queryUsed": query_used,
         "queriesTried": queries_tried,
         "ocrText": ocr_text[:1000],
+        "ocrError": ocr_error,
         "cleanTokens": clean_tokens_from_ocr(ocr_text),
         "yearsDetected": extract_years(ocr_text),
         "imageInfo": {
