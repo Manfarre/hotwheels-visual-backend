@@ -25,6 +25,17 @@ def similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, normalize_text(a), normalize_text(b)).ratio()
 
 
+def unique_keep_order(items: List[str]) -> List[str]:
+    seen = set()
+    out = []
+    for item in items:
+        key = item.strip()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out
+
+
 def color_ratio(img: Image.Image, predicate) -> float:
     small = img.resize((100, 100))
     pixels = list(small.getdata())
@@ -77,29 +88,11 @@ def extract_ocr_text(img: Image.Image) -> str:
 
 def extract_years(text: str) -> List[str]:
     years = re.findall(r"\b(19\d{2}|20\d{2})\b", text)
-    out = []
-    seen = set()
-    for y in years:
-        if y not in seen:
-            seen.add(y)
-            out.append(y)
-    return out
-
-
-def unique_keep_order(items: List[str]) -> List[str]:
-    seen = set()
-    out = []
-    for item in items:
-        key = item.strip()
-        if key and key not in seen:
-            seen.add(key)
-            out.append(key)
-    return out
+    return unique_keep_order(years)
 
 
 def clean_tokens_from_ocr(ocr_text: str) -> List[str]:
     text = normalize_text(ocr_text)
-
     tokens = re.findall(r"[A-Z0-9']{2,}", text)
 
     blocked = {
@@ -112,7 +105,8 @@ def clean_tokens_from_ocr(ocr_text: str) -> List[str]:
         "FACEBOOK", "TIKTOK", "GOOGLE", "RESULTADOS", "RESULTADO",
         "COMPARTIR", "GUARDAR", "DERECHOS", "IMAGENES", "IMÁGENES",
         "MAS", "MÁS", "INFORMACION", "INFORMACIÓN", "ONLINE",
-        "EXCLUSIVE", "LIMITED", "EDITION", "MAINLINE", "PREMIUM"
+        "EXCLUSIVE", "LIMITED", "EDITION", "MAINLINE", "PREMIUM",
+        "SCANNER", "RESULTADO", "ATRAS", "ATRÁS", "PRECIO", "FUENTE"
     }
 
     useful: List[str] = []
@@ -138,7 +132,8 @@ def extract_clean_lines(ocr_text: str) -> List[str]:
     lines = []
     blocked_substrings = [
         "FACEBOOK", "TIKTOK", "GOOGLE", "COMPARTIR", "GUARDAR",
-        "DERECHOS", "RESULTADOS", "IMAGENES", "INFORMACION"
+        "DERECHOS", "RESULTADOS", "IMAGENES", "INFORMACION",
+        "SCANNER", "RESULTADO", "ATRAS", "ATRÁS", "PRECIO", "FUENTE"
     ]
 
     for raw in re.split(r"[\r\n]+", ocr_text or ""):
@@ -157,11 +152,15 @@ def extract_clean_lines(ocr_text: str) -> List[str]:
 def infer_model_phrase(ocr_text: str) -> str:
     clean_lines = extract_clean_lines(ocr_text)
     tokens = clean_tokens_from_ocr(ocr_text)
+    text = normalize_text(ocr_text)
 
     known_keywords = [
+        "CLASSIC TV SERIES BATMOBILE",
         "BATMOBILE",
-        "BEACH BOMB",
         "BEACH BOMB TOO",
+        "BEACH BOMB",
+        "BONE SHAKER",
+        "DRAG BUS",
         "CAMARO",
         "MUSTANG",
         "CHEVY",
@@ -178,19 +177,13 @@ def infer_model_phrase(ocr_text: str) -> str:
         "HONDA",
         "TOYOTA",
         "TESLA",
-        "BONE SHAKER",
-        "DRAG BUS",
     ]
-
-    text = normalize_text(ocr_text)
 
     for keyword in known_keywords:
         if keyword in text:
-            if keyword == "BATMOBILE" and "CLASSIC TV SERIES" in text:
-                return "CLASSIC TV SERIES BATMOBILE"
             return keyword
 
-    candidate_phrases = []
+    candidate_phrases: List[str] = []
 
     for line in clean_lines:
         words = [w for w in line.split() if len(w) >= 3]
@@ -205,7 +198,8 @@ def infer_model_phrase(ocr_text: str) -> str:
 
     preferred_terms = {
         "BATMOBILE", "BEACH", "BOMB", "CAMARO", "MUSTANG", "CHEVY",
-        "FORD", "BEETLE", "VOLKSWAGEN", "CORVETTE", "PORSCHE"
+        "FORD", "BEETLE", "VOLKSWAGEN", "CORVETTE", "PORSCHE",
+        "CHARGER", "CHALLENGER", "COBRA", "BUS", "SHAKER"
     }
 
     for phrase in candidate_phrases:
@@ -218,50 +212,35 @@ def infer_model_phrase(ocr_text: str) -> str:
     return tokens[0] if tokens else ""
 
 
-def build_query_from_ocr(ocr_text: str) -> str:
+def build_queries_from_ocr(ocr_text: str) -> List[str]:
     text = normalize_text(ocr_text)
     if not text:
-        return "hot wheels"
+        return ["hot wheels"]
 
     years = extract_years(text)
     useful_tokens = clean_tokens_from_ocr(text)
     phrase = infer_model_phrase(text)
 
-    strong_model_terms = {
-        "BATMOBILE", "BEACH", "BOMB", "CAMARO", "MUSTANG", "CHEVY",
-        "FORD", "BEETLE", "VOLKSWAGEN", "CORVETTE", "PORSCHE",
-        "CHARGER", "CHALLENGER", "COBRA", "BUS", "SHAKER"
-    }
-
-    parts: List[str] = []
+    queries: List[str] = []
 
     if phrase:
-        parts.append(phrase)
+        queries.append(phrase)
 
-    extra_tokens = [
-        t for t in useful_tokens
-        if t not in normalize_text(phrase).split()
-    ]
+    if phrase and not phrase.startswith("HOT WHEELS"):
+        queries.append(f"hot wheels {phrase}")
 
-    model_hits = [t for t in extra_tokens if t in strong_model_terms]
-    if model_hits:
-        parts.extend(model_hits[:2])
+    if useful_tokens:
+        queries.append(" ".join(useful_tokens[:4]))
 
-    if years:
-        parts.append(years[0])
+    if useful_tokens:
+        queries.append(f"hot wheels {' '.join(useful_tokens[:3])}")
 
-    if not parts:
-        parts = useful_tokens[:4]
+    if years and phrase:
+        queries.append(f"{phrase} {years[0]}")
 
-    if not parts:
-        return "hot wheels"
+    queries.append("hot wheels")
 
-    query = " ".join(unique_keep_order(parts)).strip()
-
-    if len(query.split()) == 1:
-        query = f"hot wheels {query}"
-
-    return query
+    return unique_keep_order([q for q in queries if q.strip()])
 
 
 def strong_ocr_tokens(ocr_text: str) -> List[str]:
@@ -274,10 +253,7 @@ def strong_ocr_tokens(ocr_text: str) -> List[str]:
     }
 
     strong = [t for t in tokens if t in preferred]
-    if strong:
-        return unique_keep_order(strong)
-
-    return tokens[:5]
+    return unique_keep_order(strong) if strong else tokens[:5]
 
 
 def score_item_against_query(item: Dict[str, Any], query: str, ocr_text: str) -> float:
@@ -287,17 +263,17 @@ def score_item_against_query(item: Dict[str, Any], query: str, ocr_text: str) ->
     ocr_n = normalize_text(ocr_text)
 
     score = 0.0
-    score += similarity(title_n, query_n) * 3.0
+    score += similarity(title_n, query_n) * 3.5
 
     if ocr_n:
-        score += similarity(title_n, ocr_n) * 1.2
+        score += similarity(title_n, ocr_n) * 0.8
 
     strong_tokens = strong_ocr_tokens(ocr_text)
-
     matched_strong = 0
+
     for token in strong_tokens[:8]:
         if token in title_n:
-            score += 1.0
+            score += 1.2
             matched_strong += 1
 
     years = extract_years(ocr_text)
@@ -308,24 +284,28 @@ def score_item_against_query(item: Dict[str, Any], query: str, ocr_text: str) ->
     phrase = infer_model_phrase(ocr_text)
     phrase_n = normalize_text(phrase)
     if phrase_n and phrase_n in title_n:
-        score += 3.5
+        score += 4.0
 
     if strong_tokens and matched_strong == 0:
-        score -= 2.5
+        score -= 3.0
     elif strong_tokens and matched_strong == 1:
-        score -= 0.5
+        score -= 0.7
 
     if "BATMOBILE" in query_n and "BATMOBILE" not in title_n:
-        score -= 4.0
+        score -= 5.0
     if "BEACH BOMB" in query_n and "BEACH" not in title_n and "BOMB" not in title_n:
-        score -= 4.0
+        score -= 5.0
     if "CAMARO" in query_n and "CAMARO" not in title_n:
-        score -= 4.0
+        score -= 5.0
 
     return round(score, 4)
 
 
-def choose_top_match(items: List[Dict[str, Any]], query: str, ocr_text: str) -> Optional[Dict[str, Any]]:
+def choose_top_match(
+    items: List[Dict[str, Any]],
+    query: str,
+    ocr_text: str
+) -> Optional[Dict[str, Any]]:
     if not items:
         return None
 
@@ -337,7 +317,7 @@ def choose_top_match(items: List[Dict[str, Any]], query: str, ocr_text: str) -> 
     scored.sort(key=lambda x: x[1], reverse=True)
     best_item, best_score = scored[0]
 
-    if best_score < 1.5:
+    if best_score < 2.5:
         return None
 
     similarity_value = max(0.30, min(0.98, 0.35 + (best_score / 6.0)))
@@ -350,6 +330,53 @@ def choose_top_match(items: List[Dict[str, Any]], query: str, ocr_text: str) -> 
         "condition": best_item.get("condition", ""),
         "similarity": round(similarity_value, 2),
         "score": best_score,
+    }
+
+
+def fetch_best_online_match(ocr_text: str) -> Dict[str, Any]:
+    queries = build_queries_from_ocr(ocr_text)
+
+    all_items: List[Dict[str, Any]] = []
+    used_queries: List[str] = []
+
+    for query in queries[:4]:
+        result = search_ebay_items(query=query, limit=8)
+        used_queries.append(query)
+
+        if result.get("success"):
+            items = result.get("items", [])
+            all_items.extend(items)
+
+    deduped: List[Dict[str, Any]] = []
+    seen = set()
+    for item in all_items:
+        key = (
+            item.get("title", ""),
+            item.get("itemWebUrl", "")
+        )
+        if key not in seen:
+            seen.add(key)
+            deduped.append(item)
+
+    top_match = None
+    best_query = queries[0] if queries else "hot wheels"
+
+    if deduped:
+        candidates = []
+        for query in used_queries:
+            candidate = choose_top_match(deduped, query=query, ocr_text=ocr_text)
+            if candidate:
+                candidates.append((candidate, candidate.get("score", 0.0), query))
+
+        if candidates:
+            candidates.sort(key=lambda x: x[1], reverse=True)
+            top_match, _, best_query = candidates[0]
+
+    return {
+        "topMatch": top_match,
+        "matches": deduped[:10],
+        "queryUsed": best_query,
+        "queriesTried": used_queries,
     }
 
 
@@ -370,37 +397,24 @@ async def process_match(file) -> Dict[str, Any]:
     width, height = img.size
     visual = visual_signals(img)
     ocr_text = extract_ocr_text(img)
-    query = build_query_from_ocr(ocr_text)
 
-    ebay_result = search_ebay_items(query=query, limit=8)
-
-    if not ebay_result.get("success"):
-        return {
-            "success": False,
-            "topMatch": None,
-            "matches": [],
-            "message": ebay_result.get("message", "Falló la búsqueda en eBay"),
-            "queryUsed": query,
-            "ocrText": ocr_text[:700],
-            "cleanTokens": clean_tokens_from_ocr(ocr_text),
-            "imageInfo": {
-                "width": width,
-                "height": height,
-                "filename": getattr(file, "filename", ""),
-                "contentType": getattr(file, "content_type", ""),
-            },
-            "visualSignals": visual,
-        }
-
-    items = ebay_result.get("items", [])
-    top_match = choose_top_match(items, query=query, ocr_text=ocr_text)
+    online_result = fetch_best_online_match(ocr_text)
+    top_match = online_result.get("topMatch")
+    matches = online_result.get("matches", [])
+    query_used = online_result.get("queryUsed")
+    queries_tried = online_result.get("queriesTried", [])
 
     return {
         "success": True,
         "topMatch": top_match,
-        "matches": items,
-        "message": "Match con OCR + búsqueda automática en eBay completado.",
-        "queryUsed": query,
+        "matches": matches,
+        "message": (
+            "Match online completado."
+            if top_match is not None
+            else "No se encontró una coincidencia online confiable."
+        ),
+        "queryUsed": query_used,
+        "queriesTried": queries_tried,
         "ocrText": ocr_text[:700],
         "cleanTokens": clean_tokens_from_ocr(ocr_text),
         "yearsDetected": extract_years(ocr_text),
