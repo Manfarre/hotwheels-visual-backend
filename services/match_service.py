@@ -1,9 +1,9 @@
 import re
 from difflib import SequenceMatcher
 from io import BytesIO
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 from services.ebay_search_service import search_ebay_items
 
@@ -78,17 +78,83 @@ def visual_signals(img: Image.Image) -> Dict[str, float]:
     }
 
 
-def extract_ocr_text(img: Image.Image) -> str:
+def extract_years(text: str) -> List[str]:
+    years = re.findall(r"\b(19\d{2}|20\d{2})\b", text)
+    return unique_keep_order(years)
+
+
+def crop_by_percent(img: Image.Image, box: Tuple[float, float, float, float]) -> Image.Image:
+    w, h = img.size
+    left = int(w * box[0])
+    top = int(h * box[1])
+    right = int(w * box[2])
+    bottom = int(h * box[3])
+
+    left = max(0, min(left, w - 1))
+    top = max(0, min(top, h - 1))
+    right = max(left + 1, min(right, w))
+    bottom = max(top + 1, min(bottom, h))
+
+    return img.crop((left, top, right, bottom))
+
+
+def preprocess_for_ocr(img: Image.Image) -> List[Image.Image]:
+    variants = []
+
+    gray = ImageOps.grayscale(img)
+    gray = ImageOps.autocontrast(gray)
+    gray = gray.filter(ImageFilter.SHARPEN)
+
+    big = gray.resize((gray.width * 2, gray.height * 2))
+    variants.append(big)
+
+    high_contrast = ImageEnhance.Contrast(big).enhance(2.0)
+    variants.append(high_contrast)
+
+    sharp = high_contrast.filter(ImageFilter.SHARPEN)
+    variants.append(sharp)
+
+    bw = sharp.point(lambda p: 255 if p > 150 else 0)
+    variants.append(bw)
+
+    return variants
+
+
+def run_tesseract(img: Image.Image, psm: int) -> str:
     try:
         import pytesseract
-        return pytesseract.image_to_string(img) or ""
+        config = f"--oem 3 --psm {psm}"
+        return pytesseract.image_to_string(img, config=config) or ""
     except Exception:
         return ""
 
 
-def extract_years(text: str) -> List[str]:
-    years = re.findall(r"\b(19\d{2}|20\d{2})\b", text)
-    return unique_keep_order(years)
+def extract_ocr_text_by_regions(img: Image.Image) -> str:
+    regions = [
+        ("full", (0.00, 0.00, 1.00, 1.00)),
+        ("upper_main", (0.05, 0.05, 0.95, 0.55)),
+        ("name_band_top", (0.05, 0.18, 0.95, 0.34)),
+        ("name_band_mid", (0.05, 0.28, 0.95, 0.42)),
+        ("name_band_low", (0.05, 0.35, 0.95, 0.50)),
+        ("center_title", (0.15, 0.18, 0.88, 0.42)),
+        ("right_vertical", (0.82, 0.08, 0.98, 0.58)),
+        ("top_right", (0.70, 0.05, 0.98, 0.28)),
+        ("middle_strip", (0.08, 0.25, 0.92, 0.45)),
+    ]
+
+    texts: List[str] = []
+
+    for _, box in regions:
+        region = crop_by_percent(img, box)
+        variants = preprocess_for_ocr(region)
+
+        for variant in variants:
+            for psm in [6, 7, 11]:
+                text = run_tesseract(variant, psm=psm)
+                if text and text.strip():
+                    texts.append(text.strip())
+
+    return "\n".join(unique_keep_order(texts))
 
 
 def clean_tokens_from_ocr(ocr_text: str) -> List[str]:
@@ -106,7 +172,8 @@ def clean_tokens_from_ocr(ocr_text: str) -> List[str]:
         "COMPARTIR", "GUARDAR", "DERECHOS", "IMAGENES", "IMÁGENES",
         "MAS", "MÁS", "INFORMACION", "INFORMACIÓN", "ONLINE",
         "EXCLUSIVE", "LIMITED", "EDITION", "MAINLINE", "PREMIUM",
-        "SCANNER", "RESULTADO", "ATRAS", "ATRÁS", "PRECIO", "FUENTE"
+        "SCANNER", "ATRAS", "ATRÁS", "PRECIO", "FUENTE", "QUERY",
+        "USED", "OCR", "BACKEND", "CONFIABLE", "COINCIDENCIA"
     }
 
     useful: List[str] = []
@@ -133,7 +200,8 @@ def extract_clean_lines(ocr_text: str) -> List[str]:
     blocked_substrings = [
         "FACEBOOK", "TIKTOK", "GOOGLE", "COMPARTIR", "GUARDAR",
         "DERECHOS", "RESULTADOS", "IMAGENES", "INFORMACION",
-        "SCANNER", "RESULTADO", "ATRAS", "ATRÁS", "PRECIO", "FUENTE"
+        "SCANNER", "RESULTADO", "ATRAS", "ATRÁS", "PRECIO", "FUENTE",
+        "OCR LOCAL", "SIN COINCIDENCIA", "QUERY USADA"
     ]
 
     for raw in re.split(r"[\r\n]+", ocr_text or ""):
@@ -159,14 +227,16 @@ def infer_model_phrase(ocr_text: str) -> str:
         "BATMOBILE",
         "BEACH BOMB TOO",
         "BEACH BOMB",
+        "CANDY STRIPER",
         "BONE SHAKER",
         "DRAG BUS",
+        "CUSTOM VOLKSWAGEN BEETLE",
+        "VOLKSWAGEN BEETLE",
+        "BEETLE",
         "CAMARO",
         "MUSTANG",
         "CHEVY",
         "FORD",
-        "BEETLE",
-        "VOLKSWAGEN",
         "CORVETTE",
         "COBRA",
         "DODGE",
@@ -197,9 +267,10 @@ def infer_model_phrase(ocr_text: str) -> str:
     candidate_phrases = unique_keep_order(candidate_phrases)
 
     preferred_terms = {
-        "BATMOBILE", "BEACH", "BOMB", "CAMARO", "MUSTANG", "CHEVY",
-        "FORD", "BEETLE", "VOLKSWAGEN", "CORVETTE", "PORSCHE",
-        "CHARGER", "CHALLENGER", "COBRA", "BUS", "SHAKER"
+        "BATMOBILE", "BEACH", "BOMB", "CANDY", "STRIPER", "CAMARO",
+        "MUSTANG", "CHEVY", "FORD", "BEETLE", "VOLKSWAGEN",
+        "CORVETTE", "PORSCHE", "CHARGER", "CHALLENGER", "COBRA",
+        "BUS", "SHAKER"
     }
 
     for phrase in candidate_phrases:
@@ -225,18 +296,15 @@ def build_queries_from_ocr(ocr_text: str) -> List[str]:
 
     if phrase:
         queries.append(phrase)
-
-    if phrase and not phrase.startswith("HOT WHEELS"):
         queries.append(f"hot wheels {phrase}")
 
     if useful_tokens:
         queries.append(" ".join(useful_tokens[:4]))
-
-    if useful_tokens:
         queries.append(f"hot wheels {' '.join(useful_tokens[:3])}")
 
     if years and phrase:
         queries.append(f"{phrase} {years[0]}")
+        queries.append(f"hot wheels {phrase} {years[0]}")
 
     queries.append("hot wheels")
 
@@ -246,10 +314,10 @@ def build_queries_from_ocr(ocr_text: str) -> List[str]:
 def strong_ocr_tokens(ocr_text: str) -> List[str]:
     tokens = clean_tokens_from_ocr(ocr_text)
     preferred = {
-        "BATMOBILE", "BEACH", "BOMB", "TOO", "CAMARO", "MUSTANG",
-        "CHEVY", "FORD", "BEETLE", "VOLKSWAGEN", "CORVETTE",
-        "PORSCHE", "CHARGER", "CHALLENGER", "COBRA", "BUS", "SHAKER",
-        "CLASSIC", "TV"
+        "BATMOBILE", "BEACH", "BOMB", "TOO", "CANDY", "STRIPER",
+        "CAMARO", "MUSTANG", "CHEVY", "FORD", "BEETLE", "VOLKSWAGEN",
+        "CORVETTE", "PORSCHE", "CHARGER", "CHALLENGER", "COBRA",
+        "BUS", "SHAKER", "CLASSIC", "TV"
     }
 
     strong = [t for t in tokens if t in preferred]
@@ -263,37 +331,40 @@ def score_item_against_query(item: Dict[str, Any], query: str, ocr_text: str) ->
     ocr_n = normalize_text(ocr_text)
 
     score = 0.0
-    score += similarity(title_n, query_n) * 3.5
+    score += similarity(title_n, query_n) * 3.8
 
     if ocr_n:
-        score += similarity(title_n, ocr_n) * 0.8
+        score += similarity(title_n, ocr_n) * 1.0
 
     strong_tokens = strong_ocr_tokens(ocr_text)
     matched_strong = 0
 
     for token in strong_tokens[:8]:
         if token in title_n:
-            score += 1.2
+            score += 1.4
             matched_strong += 1
 
-    years = extract_years(ocr_text)
-    for year in years:
+    for year in extract_years(ocr_text):
         if year in title_n:
             score += 0.8
 
     phrase = infer_model_phrase(ocr_text)
     phrase_n = normalize_text(phrase)
     if phrase_n and phrase_n in title_n:
-        score += 4.0
+        score += 4.5
 
     if strong_tokens and matched_strong == 0:
-        score -= 3.0
+        score -= 3.5
     elif strong_tokens and matched_strong == 1:
-        score -= 0.7
+        score -= 0.8
 
     if "BATMOBILE" in query_n and "BATMOBILE" not in title_n:
         score -= 5.0
     if "BEACH BOMB" in query_n and "BEACH" not in title_n and "BOMB" not in title_n:
+        score -= 5.0
+    if "CANDY STRIPER" in query_n and ("CANDY" not in title_n or "STRIPER" not in title_n):
+        score -= 5.0
+    if "BEETLE" in query_n and "BEETLE" not in title_n and "VOLKSWAGEN" not in title_n:
         score -= 5.0
     if "CAMARO" in query_n and "CAMARO" not in title_n:
         score -= 5.0
@@ -317,7 +388,7 @@ def choose_top_match(
     scored.sort(key=lambda x: x[1], reverse=True)
     best_item, best_score = scored[0]
 
-    if best_score < 2.5:
+    if best_score < 2.8:
         return None
 
     similarity_value = max(0.30, min(0.98, 0.35 + (best_score / 6.0)))
@@ -339,7 +410,7 @@ def fetch_best_online_match(ocr_text: str) -> Dict[str, Any]:
     all_items: List[Dict[str, Any]] = []
     used_queries: List[str] = []
 
-    for query in queries[:4]:
+    for query in queries[:5]:
         result = search_ebay_items(query=query, limit=8)
         used_queries.append(query)
 
@@ -396,7 +467,7 @@ async def process_match(file) -> Dict[str, Any]:
 
     width, height = img.size
     visual = visual_signals(img)
-    ocr_text = extract_ocr_text(img)
+    ocr_text = extract_ocr_text_by_regions(img)
 
     online_result = fetch_best_online_match(ocr_text)
     top_match = online_result.get("topMatch")
@@ -415,7 +486,7 @@ async def process_match(file) -> Dict[str, Any]:
         ),
         "queryUsed": query_used,
         "queriesTried": queries_tried,
-        "ocrText": ocr_text[:700],
+        "ocrText": ocr_text[:1000],
         "cleanTokens": clean_tokens_from_ocr(ocr_text),
         "yearsDetected": extract_years(ocr_text),
         "imageInfo": {
