@@ -9,6 +9,10 @@ router = APIRouter(prefix="/ebay", tags=["eBay Auth"])
 
 @router.get("/start")
 def ebay_start():
+    """
+    Obtiene un token de aplicación de eBay.
+    Sirve para validar que las credenciales cargadas en Render funcionan.
+    """
     token_result = get_application_token()
 
     if not token_result.get("success"):
@@ -18,8 +22,8 @@ def ebay_start():
                 "success": False,
                 "env": EBAY_ENV,
                 "client_id_loaded": bool(EBAY_CLIENT_ID),
-                "message": token_result.get("message", "No se pudo obtener token")
-            }
+                "message": token_result.get("message", "No se pudo obtener token"),
+            },
         )
 
     return JSONResponse(
@@ -27,10 +31,28 @@ def ebay_start():
         content={
             "success": True,
             "env": EBAY_ENV,
+            "client_id_loaded": bool(EBAY_CLIENT_ID),
             "token_type": token_result.get("token_type", ""),
             "expires_in": token_result.get("expires_in", 0),
-            "access_token": token_result.get("access_token", "")
-        }
+            "access_token": token_result.get("access_token", ""),
+        },
+    )
+
+
+@router.get("/status")
+def ebay_status():
+    """
+    Ruta simple para validar si el módulo de eBay está activo
+    y si Render está leyendo variables.
+    """
+    return JSONResponse(
+        status_code=200,
+        content={
+            "success": True,
+            "module": "ebay_auth",
+            "env": EBAY_ENV,
+            "client_id_loaded": bool(EBAY_CLIENT_ID),
+        },
     )
 
 
@@ -41,7 +63,8 @@ def ebay_callback():
         <html>
             <body style="font-family: Arial; padding: 30px;">
                 <h2>Callback temporal</h2>
-                <p>Esta ruta está activa, pero el flujo OAuth completo aún no está implementado.</p>
+                <p>La ruta de callback está activa correctamente.</p>
+                <p>El flujo OAuth completo lo implementamos después.</p>
             </body>
         </html>
         """
@@ -55,7 +78,7 @@ def ebay_accepted():
         <html>
             <body style="font-family: Arial; padding: 30px;">
                 <h2>Autorización aceptada</h2>
-                <p>Ruta activa correctamente.</p>
+                <p>La ruta accepted está activa correctamente.</p>
             </body>
         </html>
         """
@@ -69,7 +92,7 @@ def ebay_declined():
         <html>
             <body style="font-family: Arial; padding: 30px;">
                 <h2>Autorización rechazada</h2>
-                <p>Ruta activa correctamente.</p>
+                <p>La ruta declined está activa correctamente.</p>
             </body>
         </html>
         """
