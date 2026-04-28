@@ -269,7 +269,6 @@ def canonicalize_token(token: str) -> str:
 
         "BATNA": "BATMAN",
         "BATMAM": "BATMAN",
-        "BATMOBILE": "BATMOBILE",
         "BATMOBLLE": "BATMOBILE",
         "BATMOB1LE": "BATMOBILE",
 
@@ -284,7 +283,6 @@ def canonicalize_token(token: str) -> str:
         "VOLKSWACE": "VOLKSWAGEN",
         "VOLKSWAGENN": "VOLKSWAGEN",
 
-        "BEETLE": "BEETLE",
         "BEETLF": "BEETLE",
     }
 
@@ -459,6 +457,8 @@ def build_queries_from_ocr(ocr_text: str) -> List[str]:
         queries.append("67 SHELBY GT500")
         queries.append("hot wheels 67 SHELBY GT500")
         queries.append("SHELBY GT500")
+        queries.append("SHELBY GT500 FORD")
+        queries.append("hot wheels SHELBY GT500")
 
     if phrase == "CANDY STRIPER":
         queries.append("hot wheels CANDY STRIPER")
@@ -466,9 +466,14 @@ def build_queries_from_ocr(ocr_text: str) -> List[str]:
     if phrase == "BEACH BOMB TOO":
         queries.append("hot wheels BEACH BOMB TOO")
         queries.append("BEACH BOMB TOO")
+        queries.append("BEACH BOMB")
+        queries.append("hot wheels BEACH BOMB")
+        queries.append("VOLKSWAGEN BEACH BOMB")
+        queries.append("hot wheels VOLKSWAGEN BEACH BOMB")
 
     if phrase == "BEACH BOMB":
         queries.append("hot wheels BEACH BOMB")
+        queries.append("VOLKSWAGEN BEACH BOMB")
 
     if phrase == "BATMOBILE" or "BATMOBILE" in phrase:
         queries.append("hot wheels BATMOBILE")
