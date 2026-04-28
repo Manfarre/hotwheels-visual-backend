@@ -152,9 +152,12 @@ def run_tesseract(img: Image.Image, psm: int) -> str:
 
 def extract_ocr_text_by_regions(img: Image.Image) -> str:
     regions = [
+        ("full", (0.00, 0.00, 1.00, 1.00)),
         ("upper_main", (0.05, 0.05, 0.95, 0.55)),
+        ("center_title", (0.15, 0.18, 0.88, 0.42)),
         ("name_band_top", (0.05, 0.18, 0.95, 0.34)),
         ("name_band_mid", (0.05, 0.28, 0.95, 0.42)),
+        ("name_band_low", (0.05, 0.35, 0.95, 0.50)),
         ("right_vertical", (0.82, 0.08, 0.98, 0.58)),
         ("bottom_model_name", (0.18, 0.67, 0.82, 0.84)),
     ]
@@ -166,9 +169,12 @@ def extract_ocr_text_by_regions(img: Image.Image) -> str:
         variants = preprocess_for_ocr(region)
 
         for variant in variants:
-            psms = [6, 7]
             if region_name == "bottom_model_name":
                 psms = [7, 6]
+            elif region_name in {"center_title", "name_band_top", "name_band_mid", "name_band_low"}:
+                psms = [7, 6]
+            else:
+                psms = [6, 7]
 
             for psm in psms:
                 text = run_tesseract(variant, psm=psm)
@@ -203,6 +209,11 @@ def looks_like_garbage(token: str) -> bool:
             return True
 
     return False
+
+
+def similarity_simple(a: str, b: str) -> float:
+    from difflib import SequenceMatcher
+    return SequenceMatcher(None, normalize_text(a), normalize_text(b)).ratio()
 
 
 def canonicalize_token(token: str) -> str:
@@ -263,11 +274,6 @@ def canonicalize_token(token: str) -> str:
             return target
 
     return t
-
-
-def similarity_simple(a: str, b: str) -> float:
-    from difflib import SequenceMatcher
-    return SequenceMatcher(None, normalize_text(a), normalize_text(b)).ratio()
 
 
 def extract_raw_tokens(ocr_text: str) -> List[str]:
@@ -359,14 +365,6 @@ def strong_ocr_tokens(ocr_text: str) -> List[str]:
     tokens = clean_tokens_from_ocr(ocr_text)
     strong = [t for t in tokens if t in STRONG_MODEL_TOKENS]
     return unique_keep_order(strong) if strong else tokens[:5]
-
-
-def load_image_from_upload(file) -> Image.Image:
-    content = file.read() if hasattr(file, "read") else file
-    if isinstance(content, bytes):
-        img = Image.open(BytesIO(content)).convert("RGB")
-        return downscale_image_for_processing(img, max_side=1400)
-    raise ValueError("Contenido de imagen no válido")
 
 
 async def build_evidence_from_upload(file) -> Dict[str, Any]:
