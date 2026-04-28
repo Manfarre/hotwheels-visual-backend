@@ -43,7 +43,8 @@ STRONG_MODEL_TOKENS = {
     "BATMOBILE", "BATMAN", "BEACH", "BOMB", "TOO", "CANDY", "STRIPER",
     "SHELBY", "GT500", "CAMARO", "MUSTANG", "CHEVY", "FORD",
     "BEETLE", "VOLKSWAGEN", "CORVETTE", "PORSCHE", "CHARGER",
-    "CHALLENGER", "COBRA", "BUS", "SHAKER", "CLASSIC", "TV", "BEGINS"
+    "CHALLENGER", "COBRA", "BUS", "SHAKER", "CLASSIC", "TV", "BEGINS",
+    "VAN"
 }
 
 BLOCKED_TOKENS = {
@@ -470,10 +471,16 @@ def build_queries_from_ocr(ocr_text: str) -> List[str]:
         queries.append("hot wheels BEACH BOMB")
         queries.append("VOLKSWAGEN BEACH BOMB")
         queries.append("hot wheels VOLKSWAGEN BEACH BOMB")
+        queries.append("VOLKSWAGEN BEACH BOMB TOO")
+        queries.append("hot wheels VOLKSWAGEN BEACH BOMB TOO")
+        queries.append("BEACH BOMB VAN")
+        queries.append("hot wheels BEACH BOMB VAN")
+        queries.append("VOLKSWAGEN BEACH BOMB VAN")
 
     if phrase == "BEACH BOMB":
         queries.append("hot wheels BEACH BOMB")
         queries.append("VOLKSWAGEN BEACH BOMB")
+        queries.append("BEACH BOMB VAN")
 
     if phrase == "BATMOBILE" or "BATMOBILE" in phrase:
         queries.append("hot wheels BATMOBILE")
@@ -542,6 +549,10 @@ def score_item_against_query(item: Dict[str, Any], query: str, ocr_text: str) ->
         score -= 4.0
     if "BEACH BOMB" in query_n and ("BEACH" not in title_n or "BOMB" not in title_n):
         score -= 5.5
+    if "VOLKSWAGEN" in query_n and "VOLKSWAGEN" not in title_n and "VW" not in title_n:
+        score -= 2.0
+    if "VAN" in query_n and "VAN" not in title_n and "BUS" not in title_n:
+        score -= 1.5
     if "CANDY STRIPER" in query_n and ("CANDY" not in title_n or "STRIPER" not in title_n):
         score -= 5.5
     if "BEETLE" in query_n and "BEETLE" not in title_n and "VOLKSWAGEN" not in title_n:
@@ -594,7 +605,7 @@ def fetch_best_online_match(ocr_text: str) -> Dict[str, Any]:
     all_items: List[Dict[str, Any]] = []
     used_queries: List[str] = []
 
-    for query in queries[:6]:
+    for query in queries[:10]:
         result = search_ebay_items(query=query, limit=8)
         used_queries.append(query)
 
