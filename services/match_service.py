@@ -659,6 +659,30 @@ def choose_top_match(
     }
 
 
+def build_probable_top_match(ocr_text: str) -> Optional[Dict[str, Any]]:
+    phrase = infer_model_phrase(ocr_text)
+    strong_tokens = strong_ocr_tokens(ocr_text)
+
+    if not phrase:
+        return None
+
+    confidence = 0.55
+    if len(strong_tokens) >= 2:
+        confidence = 0.72
+    if len(strong_tokens) >= 3:
+        confidence = 0.82
+
+    return {
+        "name": phrase,
+        "price": "Sin resultado en eBay",
+        "url": "",
+        "image": "",
+        "condition": "Identificación probable por OCR",
+        "similarity": round(confidence, 2),
+        "score": round(confidence * 10, 2),
+    }
+
+
 def run_search_round(queries: List[str], limit: int = 8) -> Dict[str, Any]:
     all_items: List[Dict[str, Any]] = []
     used_queries: List[str] = []
@@ -713,11 +737,19 @@ def fetch_best_online_match(ocr_text: str) -> Dict[str, Any]:
             candidates.sort(key=lambda x: x[1], reverse=True)
             top_match, _, best_query = candidates[0]
 
+    accepted_match = top_match is not None
+
+    if top_match is None:
+        probable = build_probable_top_match(ocr_text)
+        if probable is not None:
+            top_match = probable
+
     return {
         "topMatch": top_match,
         "matches": deduped[:10],
         "queryUsed": best_query,
         "queriesTried": unique_keep_order(used_queries),
+        "acceptedMatch": accepted_match,
     }
 
 
@@ -735,6 +767,7 @@ async def process_match(file) -> Dict[str, Any]:
             "visualSignals": {},
             "ocrError": "",
             "ocrText": "",
+            "acceptedMatch": False,
         }
 
     width, height = img.size
@@ -752,6 +785,7 @@ async def process_match(file) -> Dict[str, Any]:
     matches = online_result.get("matches", [])
     query_used = online_result.get("queryUsed")
     queries_tried = online_result.get("queriesTried", [])
+    accepted_match = online_result.get("acceptedMatch", False)
 
     return {
         "success": True,
@@ -759,9 +793,12 @@ async def process_match(file) -> Dict[str, Any]:
         "matches": matches,
         "message": (
             "Match online completado."
+            if accepted_match
+            else "No hubo resultado en eBay; mostrando identificación probable por OCR."
             if top_match is not None
             else "No se encontró una coincidencia online confiable."
         ),
+        "acceptedMatch": accepted_match,
         "queryUsed": query_used,
         "queriesTried": queries_tried,
         "ocrText": ocr_text[:1000],
