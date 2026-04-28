@@ -194,16 +194,21 @@ def extract_ocr_text_by_regions(img: Image.Image) -> str:
         ("name_band_top", (0.05, 0.18, 0.95, 0.34)),
         ("name_band_mid", (0.05, 0.28, 0.95, 0.42)),
         ("right_vertical", (0.82, 0.08, 0.98, 0.58)),
+        ("bottom_model_name", (0.18, 0.67, 0.82, 0.84)),
     ]
 
     texts: List[str] = []
 
-    for _, box in regions:
+    for region_name, box in regions:
         region = crop_by_percent(img, box)
         variants = preprocess_for_ocr(region)
 
         for variant in variants:
-            for psm in [6, 7]:
+            psms = [6, 7]
+            if region_name == "bottom_model_name":
+                psms = [7, 6]
+
+            for psm in psms:
                 text = run_tesseract(variant, psm=psm)
                 if text and text.strip():
                     texts.append(text.strip())
