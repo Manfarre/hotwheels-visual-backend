@@ -685,4 +685,3 @@ async def process_match(file) -> Dict[str, Any]:
         },
         "visualSignals": visual,
     }
-}
