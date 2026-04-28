@@ -506,6 +506,66 @@ def build_queries_from_ocr(ocr_text: str) -> List[str]:
     return unique_keep_order([q for q in queries if q.strip()])
 
 
+def build_relaxed_queries_from_phrase(phrase: str) -> List[str]:
+    phrase_n = normalize_text(phrase)
+    relaxed: List[str] = []
+
+    if not phrase_n:
+        return relaxed
+
+    if phrase_n == "BEACH BOMB TOO":
+        relaxed.extend([
+            "BEACH BOMB",
+            "hot wheels BEACH BOMB",
+            "VOLKSWAGEN BEACH BOMB",
+            "hot wheels VOLKSWAGEN BEACH BOMB",
+            "BEACH BOMB VAN",
+            "hot wheels BEACH BOMB VAN",
+            "VOLKSWAGEN BEACH BOMB VAN",
+            "VW BEACH BOMB",
+        ])
+
+    elif phrase_n == "67 SHELBY GT500":
+        relaxed.extend([
+            "SHELBY GT500",
+            "hot wheels SHELBY GT500",
+            "SHELBY GT500 FORD",
+            "FORD SHELBY GT500",
+            "hot wheels FORD SHELBY GT500",
+        ])
+
+    elif "BATMOBILE" in phrase_n:
+        relaxed.extend([
+            "BATMOBILE",
+            "hot wheels BATMOBILE",
+            "BATMAN BATMOBILE",
+            "hot wheels BATMAN BATMOBILE",
+        ])
+
+    elif phrase_n == "CANDY STRIPER":
+        relaxed.extend([
+            "CANDY STRIPER",
+            "hot wheels CANDY STRIPER",
+            "STRIPER hot wheels",
+        ])
+
+    elif phrase_n == "VOLKSWAGEN BEETLE":
+        relaxed.extend([
+            "VOLKSWAGEN BEETLE",
+            "hot wheels VOLKSWAGEN BEETLE",
+            "hot wheels BEETLE",
+            "VW BEETLE hot wheels",
+        ])
+
+    tokens = [t for t in phrase_n.split() if t]
+    if len(tokens) >= 2:
+        relaxed.append(" ".join(tokens[:2]))
+    if len(tokens) >= 1:
+        relaxed.append(tokens[0])
+
+    return unique_keep_order(relaxed)
+
+
 def strong_ocr_tokens(ocr_text: str) -> List[str]:
     tokens = clean_tokens_from_ocr(ocr_text)
     strong = [t for t in tokens if t in STRONG_MODEL_TOKENS]
@@ -599,15 +659,13 @@ def choose_top_match(
     }
 
 
-def fetch_best_online_match(ocr_text: str) -> Dict[str, Any]:
-    queries = build_queries_from_ocr(ocr_text)
-
+def run_search_round(queries: List[str], limit: int = 8) -> Dict[str, Any]:
     all_items: List[Dict[str, Any]] = []
     used_queries: List[str] = []
 
-    for query in queries[:10]:
-        result = search_ebay_items(query=query, limit=8)
+    for query in queries:
         used_queries.append(query)
+        result = search_ebay_items(query=query, limit=limit)
 
         if result.get("success"):
             items = result.get("items", [])
@@ -616,20 +674,37 @@ def fetch_best_online_match(ocr_text: str) -> Dict[str, Any]:
     deduped: List[Dict[str, Any]] = []
     seen = set()
     for item in all_items:
-        key = (
-            item.get("title", ""),
-            item.get("itemWebUrl", "")
-        )
+        key = (item.get("title", ""), item.get("itemWebUrl", ""))
         if key not in seen:
             seen.add(key)
             deduped.append(item)
 
+    return {
+        "items": deduped,
+        "used_queries": used_queries,
+    }
+
+
+def fetch_best_online_match(ocr_text: str) -> Dict[str, Any]:
+    phrase = infer_model_phrase(ocr_text)
+    primary_queries = build_queries_from_ocr(ocr_text)
+
+    first_round = run_search_round(primary_queries[:10], limit=8)
+    deduped = first_round.get("items", [])
+    used_queries = first_round.get("used_queries", [])
+
+    if not deduped:
+        relaxed_queries = build_relaxed_queries_from_phrase(phrase)
+        second_round = run_search_round(relaxed_queries[:8], limit=8)
+        deduped = second_round.get("items", [])
+        used_queries.extend(second_round.get("used_queries", []))
+
     top_match = None
-    best_query = queries[0] if queries else "hot wheels"
+    best_query = primary_queries[0] if primary_queries else "hot wheels"
 
     if deduped:
         candidates = []
-        for query in used_queries:
+        for query in unique_keep_order(used_queries):
             candidate = choose_top_match(deduped, query=query, ocr_text=ocr_text)
             if candidate:
                 candidates.append((candidate, candidate.get("score", 0.0), query))
@@ -642,7 +717,7 @@ def fetch_best_online_match(ocr_text: str) -> Dict[str, Any]:
         "topMatch": top_match,
         "matches": deduped[:10],
         "queryUsed": best_query,
-        "queriesTried": used_queries,
+        "queriesTried": unique_keep_order(used_queries),
     }
 
 
