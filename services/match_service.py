@@ -1,7 +1,7 @@
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from services.candidate_service import build_candidates
-from services.evidence_service import build_evidence_from_upload, extract_years
+from services.evidence_service import build_evidence_from_upload
 from services.identity_service import build_identity_top_match, resolve_identity
 from services.market_service import fetch_market_data
 
@@ -24,14 +24,17 @@ async def process_match(file) -> Dict[str, Any]:
             "yearsDetected": evidence.get("yearsDetected", []),
             "imageInfo": evidence.get("imageInfo", {}),
             "visualSignals": evidence.get("visualSignals", {}),
+            "candidates": [],
+            "identityStatus": "no_match",
         }
 
     candidates = build_candidates(evidence)
     identity = resolve_identity(evidence, candidates)
 
     identity_status = identity.get("identityStatus", "no_match")
+    identity_source = identity.get("source", "")
     model_name = identity.get("modelName", "")
-    probable_top_match = build_identity_top_match(identity)
+    identity_top_match = build_identity_top_match(identity)
 
     market_result: Dict[str, Any] = {
         "acceptedMatch": False,
@@ -56,9 +59,15 @@ async def process_match(file) -> Dict[str, Any]:
     if accepted_match and market_top_match is not None:
         final_top_match = market_top_match
         message = "Match online completado."
-    elif identity_status == "probable" and probable_top_match is not None:
-        final_top_match = probable_top_match
+
+    elif identity_status == "confirmed" and identity_top_match is not None:
+        final_top_match = identity_top_match
+        message = "Modelo identificado por catálogo wiki; no hubo resultado en eBay."
+
+    elif identity_status == "probable" and identity_top_match is not None:
+        final_top_match = identity_top_match
         message = "No hubo resultado en eBay; mostrando identificación probable por OCR."
+
     else:
         final_top_match = None
         message = "No se encontró una coincidencia online confiable."
@@ -79,4 +88,5 @@ async def process_match(file) -> Dict[str, Any]:
         "visualSignals": evidence.get("visualSignals", {}),
         "candidates": candidates,
         "identityStatus": identity_status,
+        "identitySource": identity_source,
     }
