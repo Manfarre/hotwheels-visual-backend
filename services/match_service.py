@@ -92,6 +92,18 @@ def unique_keep_order(items: List[str]) -> List[str]:
     return out
 
 
+def downscale_image_for_processing(img: Image.Image, max_side: int = 1400) -> Image.Image:
+    w, h = img.size
+    max_current = max(w, h)
+
+    if max_current <= max_side:
+        return img
+
+    scale = max_side / float(max_current)
+    new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
+    return img.resize(new_size, Image.Resampling.LANCZOS)
+
+
 def color_ratio(img: Image.Image, predicate) -> float:
     small = img.resize((100, 100))
     pixels = list(small.getdata())
@@ -161,17 +173,11 @@ def preprocess_for_ocr(img: Image.Image) -> List[Image.Image]:
     gray = ImageOps.autocontrast(gray)
     gray = gray.filter(ImageFilter.SHARPEN)
 
-    big = gray.resize((gray.width * 2, gray.height * 2))
-    variants.append(big)
+    base = gray.resize((max(1, gray.width * 2), max(1, gray.height * 2)))
+    variants.append(base)
 
-    high_contrast = ImageEnhance.Contrast(big).enhance(2.0)
+    high_contrast = ImageEnhance.Contrast(base).enhance(2.0)
     variants.append(high_contrast)
-
-    sharp = high_contrast.filter(ImageFilter.SHARPEN)
-    variants.append(sharp)
-
-    bw = sharp.point(lambda p: 255 if p > 150 else 0)
-    variants.append(bw)
 
     return variants
 
@@ -183,16 +189,12 @@ def run_tesseract(img: Image.Image, psm: int) -> str:
 
 
 def extract_ocr_text_by_regions(img: Image.Image) -> str:
+    # Menos regiones = menos tiempo
     regions = [
-        ("full", (0.00, 0.00, 1.00, 1.00)),
         ("upper_main", (0.05, 0.05, 0.95, 0.55)),
         ("name_band_top", (0.05, 0.18, 0.95, 0.34)),
         ("name_band_mid", (0.05, 0.28, 0.95, 0.42)),
-        ("name_band_low", (0.05, 0.35, 0.95, 0.50)),
-        ("center_title", (0.15, 0.18, 0.88, 0.42)),
         ("right_vertical", (0.82, 0.08, 0.98, 0.58)),
-        ("top_right", (0.70, 0.05, 0.98, 0.28)),
-        ("middle_strip", (0.08, 0.25, 0.92, 0.45)),
     ]
 
     texts: List[str] = []
@@ -201,8 +203,9 @@ def extract_ocr_text_by_regions(img: Image.Image) -> str:
         region = crop_by_percent(img, box)
         variants = preprocess_for_ocr(region)
 
+        # Menos PSM = menos tiempo
         for variant in variants:
-            for psm in [6, 7, 11]:
+            for psm in [6, 7]:
                 text = run_tesseract(variant, psm=psm)
                 if text and text.strip():
                     texts.append(text.strip())
@@ -455,51 +458,58 @@ def build_queries_from_ocr(ocr_text: str) -> List[str]:
         queries.append(f"hot wheels {phrase}")
 
     if "SHELBY GT500" in phrase:
-        queries.append("67 SHELBY GT500")
-        queries.append("hot wheels 67 SHELBY GT500")
-        queries.append("SHELBY GT500")
-        queries.append("SHELBY GT500 FORD")
-        queries.append("hot wheels SHELBY GT500")
+        queries.extend([
+            "67 SHELBY GT500",
+            "hot wheels 67 SHELBY GT500",
+            "SHELBY GT500",
+            "hot wheels SHELBY GT500",
+        ])
 
     if phrase == "CANDY STRIPER":
-        queries.append("hot wheels CANDY STRIPER")
+        queries.extend([
+            "CANDY STRIPER",
+            "hot wheels CANDY STRIPER",
+        ])
 
     if phrase == "BEACH BOMB TOO":
-        queries.append("hot wheels BEACH BOMB TOO")
-        queries.append("BEACH BOMB TOO")
-        queries.append("BEACH BOMB")
-        queries.append("hot wheels BEACH BOMB")
-        queries.append("VOLKSWAGEN BEACH BOMB")
-        queries.append("hot wheels VOLKSWAGEN BEACH BOMB")
-        queries.append("VOLKSWAGEN BEACH BOMB TOO")
-        queries.append("hot wheels VOLKSWAGEN BEACH BOMB TOO")
-        queries.append("BEACH BOMB VAN")
-        queries.append("hot wheels BEACH BOMB VAN")
-        queries.append("VOLKSWAGEN BEACH BOMB VAN")
+        queries.extend([
+            "BEACH BOMB TOO",
+            "hot wheels BEACH BOMB TOO",
+            "BEACH BOMB",
+            "hot wheels BEACH BOMB",
+            "VOLKSWAGEN BEACH BOMB",
+            "hot wheels VOLKSWAGEN BEACH BOMB",
+        ])
 
     if phrase == "BEACH BOMB":
-        queries.append("hot wheels BEACH BOMB")
-        queries.append("VOLKSWAGEN BEACH BOMB")
-        queries.append("BEACH BOMB VAN")
+        queries.extend([
+            "BEACH BOMB",
+            "hot wheels BEACH BOMB",
+        ])
 
-    if phrase == "BATMOBILE" or "BATMOBILE" in phrase:
-        queries.append("hot wheels BATMOBILE")
+    if "BATMOBILE" in phrase:
+        queries.extend([
+            "BATMOBILE",
+            "hot wheels BATMOBILE",
+        ])
         if "BATMAN BEGINS" in text or "BATMAN" in useful_tokens:
-            queries.append("BATMAN BEGINS BATMOBILE")
-            queries.append("hot wheels BATMAN BEGINS BATMOBILE")
+            queries.extend([
+                "BATMAN BEGINS BATMOBILE",
+                "hot wheels BATMAN BEGINS BATMOBILE",
+            ])
 
     if phrase == "VOLKSWAGEN BEETLE":
-        queries.append("hot wheels VOLKSWAGEN BEETLE")
-        queries.append("hot wheels BEETLE")
+        queries.extend([
+            "VOLKSWAGEN BEETLE",
+            "hot wheels VOLKSWAGEN BEETLE",
+        ])
 
     clean_useful = [t for t in useful_tokens if not looks_like_garbage(t)]
     if clean_useful:
-        queries.append(" ".join(clean_useful[:3]))
-        queries.append(f"hot wheels {' '.join(clean_useful[:2])}")
+        queries.append(" ".join(clean_useful[:2]))
 
     if years and phrase:
         queries.append(f"{phrase} {years[0]}")
-        queries.append(f"hot wheels {phrase} {years[0]}")
 
     queries.append("hot wheels")
 
@@ -516,52 +526,36 @@ def build_relaxed_queries_from_phrase(phrase: str) -> List[str]:
     if phrase_n == "BEACH BOMB TOO":
         relaxed.extend([
             "BEACH BOMB",
-            "hot wheels BEACH BOMB",
             "VOLKSWAGEN BEACH BOMB",
-            "hot wheels VOLKSWAGEN BEACH BOMB",
-            "BEACH BOMB VAN",
-            "hot wheels BEACH BOMB VAN",
-            "VOLKSWAGEN BEACH BOMB VAN",
             "VW BEACH BOMB",
         ])
 
     elif phrase_n == "67 SHELBY GT500":
         relaxed.extend([
             "SHELBY GT500",
-            "hot wheels SHELBY GT500",
-            "SHELBY GT500 FORD",
             "FORD SHELBY GT500",
-            "hot wheels FORD SHELBY GT500",
         ])
 
     elif "BATMOBILE" in phrase_n:
         relaxed.extend([
             "BATMOBILE",
-            "hot wheels BATMOBILE",
             "BATMAN BATMOBILE",
-            "hot wheels BATMAN BATMOBILE",
         ])
 
     elif phrase_n == "CANDY STRIPER":
         relaxed.extend([
             "CANDY STRIPER",
-            "hot wheels CANDY STRIPER",
-            "STRIPER hot wheels",
         ])
 
     elif phrase_n == "VOLKSWAGEN BEETLE":
         relaxed.extend([
             "VOLKSWAGEN BEETLE",
-            "hot wheels VOLKSWAGEN BEETLE",
-            "hot wheels BEETLE",
-            "VW BEETLE hot wheels",
+            "VW BEETLE",
         ])
 
     tokens = [t for t in phrase_n.split() if t]
     if len(tokens) >= 2:
         relaxed.append(" ".join(tokens[:2]))
-    if len(tokens) >= 1:
-        relaxed.append(tokens[0])
 
     return unique_keep_order(relaxed)
 
@@ -586,14 +580,10 @@ def score_item_against_query(item: Dict[str, Any], query: str, ocr_text: str) ->
         score += similarity(title_n, phrase_n) * 2.0
 
     matched_strong = 0
-    for token in strong_tokens[:8]:
+    for token in strong_tokens[:6]:
         if token in title_n:
             score += 1.6
             matched_strong += 1
-
-    for year in extract_years(ocr_text):
-        if year in title_n:
-            score += 0.8
 
     if phrase_n and phrase_n in title_n:
         score += 5.0
@@ -611,8 +601,6 @@ def score_item_against_query(item: Dict[str, Any], query: str, ocr_text: str) ->
         score -= 5.5
     if "VOLKSWAGEN" in query_n and "VOLKSWAGEN" not in title_n and "VW" not in title_n:
         score -= 2.0
-    if "VAN" in query_n and "VAN" not in title_n and "BUS" not in title_n:
-        score -= 1.5
     if "CANDY STRIPER" in query_n and ("CANDY" not in title_n or "STRIPER" not in title_n):
         score -= 5.5
     if "BEETLE" in query_n and "BEETLE" not in title_n and "VOLKSWAGEN" not in title_n:
@@ -683,7 +671,7 @@ def build_probable_top_match(ocr_text: str) -> Optional[Dict[str, Any]]:
     }
 
 
-def run_search_round(queries: List[str], limit: int = 8) -> Dict[str, Any]:
+def run_search_round(queries: List[str], limit: int = 6) -> Dict[str, Any]:
     all_items: List[Dict[str, Any]] = []
     used_queries: List[str] = []
 
@@ -694,6 +682,10 @@ def run_search_round(queries: List[str], limit: int = 8) -> Dict[str, Any]:
         if result.get("success"):
             items = result.get("items", [])
             all_items.extend(items)
+
+        # si ya hay suficientes resultados, cortamos
+        if len(all_items) >= 10:
+            break
 
     deduped: List[Dict[str, Any]] = []
     seen = set()
@@ -713,13 +705,13 @@ def fetch_best_online_match(ocr_text: str) -> Dict[str, Any]:
     phrase = infer_model_phrase(ocr_text)
     primary_queries = build_queries_from_ocr(ocr_text)
 
-    first_round = run_search_round(primary_queries[:10], limit=8)
+    first_round = run_search_round(primary_queries[:6], limit=6)
     deduped = first_round.get("items", [])
     used_queries = first_round.get("used_queries", [])
 
-    if not deduped:
+    if not deduped and phrase:
         relaxed_queries = build_relaxed_queries_from_phrase(phrase)
-        second_round = run_search_round(relaxed_queries[:8], limit=8)
+        second_round = run_search_round(relaxed_queries[:4], limit=6)
         deduped = second_round.get("items", [])
         used_queries.extend(second_round.get("used_queries", []))
 
@@ -758,6 +750,7 @@ async def process_match(file) -> Dict[str, Any]:
 
     try:
         img = Image.open(BytesIO(content)).convert("RGB")
+        img = downscale_image_for_processing(img, max_side=1400)
     except Exception as e:
         return {
             "success": False,
