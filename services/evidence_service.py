@@ -10,7 +10,7 @@ STRONG_MODEL_TOKENS = {
     "SHELBY", "GT500", "CAMARO", "MUSTANG", "CHEVY", "FORD",
     "BEETLE", "VOLKSWAGEN", "CORVETTE", "PORSCHE", "CHARGER",
     "CHALLENGER", "COBRA", "BUS", "SHAKER", "CLASSIC", "TV", "BEGINS",
-    "VAN"
+    "VAN", "HARDNOZE", "MERC", "MERCURY"
 }
 
 BLOCKED_TOKENS = {
@@ -26,7 +26,7 @@ BLOCKED_TOKENS = {
     "EXCLUSIVE", "LIMITED", "EDITION", "MAINLINE", "PREMIUM",
     "SCANNER", "ATRAS", "ATRÁS", "PRECIO", "FUENTE", "QUERY",
     "USED", "OCR", "BACKEND", "CONFIABLE", "COINCIDENCIA",
-    "LIFE", "HOW", "HOR", "HOY", "VIL", "REE"
+    "LIFE", "HOW", "HOR", "HOY", "VIL", "REE", "FIRST", "EDITIONS"
 }
 
 
@@ -35,7 +35,7 @@ def normalize_text(text: str) -> str:
         return ""
     text = text.upper()
     text = text.replace("\n", " ")
-    for ch in [",", ".", ":", ";", "_", "(", ")", "[", "]", "{", "}", "'", '"', "|", "•", "·", "™", "®"]:
+    for ch in [",", ".", ":", ";", "_", "(", ")", "[", "]", "{", "}", "'", '"', "|", "•", "·", "™", "®", "#"]:
         text = text.replace(ch, " ")
     text = text.replace("/", " / ")
     text = text.replace("-", " ")
@@ -141,6 +141,9 @@ def preprocess_for_ocr(img: Image.Image) -> List[Image.Image]:
     high_contrast = ImageEnhance.Contrast(base).enhance(2.0)
     variants.append(high_contrast)
 
+    bw = high_contrast.point(lambda p: 255 if p > 155 else 0)
+    variants.append(bw)
+
     return variants
 
 
@@ -152,27 +155,32 @@ def run_tesseract(img: Image.Image, psm: int) -> str:
 
 def extract_ocr_text_by_regions(img: Image.Image) -> str:
     regions = [
-        ("full", (0.00, 0.00, 1.00, 1.00)),
-        ("upper_main", (0.05, 0.05, 0.95, 0.55)),
-        ("center_title", (0.15, 0.18, 0.88, 0.42)),
-        ("name_band_top", (0.05, 0.18, 0.95, 0.34)),
-        ("name_band_mid", (0.05, 0.28, 0.95, 0.42)),
-        ("name_band_low", (0.05, 0.35, 0.95, 0.50)),
-        ("right_vertical", (0.82, 0.08, 0.98, 0.58)),
-        ("bottom_model_name", (0.18, 0.67, 0.82, 0.84)),
+        ("full", (0.00, 0.00, 1.00, 1.00), False),
+        ("upper_main", (0.05, 0.05, 0.95, 0.55), False),
+        ("center_title", (0.15, 0.18, 0.88, 0.42), False),
+        ("name_band_top", (0.05, 0.18, 0.95, 0.34), False),
+        ("name_band_mid", (0.05, 0.28, 0.95, 0.42), False),
+        ("name_band_low", (0.05, 0.35, 0.95, 0.50), False),
+        ("right_vertical", (0.84, 0.10, 0.99, 0.90), False),
+        ("right_vertical_rotated", (0.84, 0.10, 0.99, 0.90), True),
+        ("bottom_model_name", (0.18, 0.67, 0.82, 0.84), False),
     ]
 
     texts: List[str] = []
 
-    for region_name, box in regions:
+    for region_name, box, rotate in regions:
         region = crop_by_percent(img, box)
+
+        if rotate:
+            region = region.rotate(90, expand=True)
+
         variants = preprocess_for_ocr(region)
 
         for variant in variants:
-            if region_name == "bottom_model_name":
+            if region_name in {"bottom_model_name", "center_title", "name_band_top", "name_band_mid", "name_band_low"}:
                 psms = [7, 6]
-            elif region_name in {"center_title", "name_band_top", "name_band_mid", "name_band_low"}:
-                psms = [7, 6]
+            elif region_name in {"right_vertical", "right_vertical_rotated"}:
+                psms = [6, 7, 11]
             else:
                 psms = [6, 7]
 
@@ -184,6 +192,11 @@ def extract_ocr_text_by_regions(img: Image.Image) -> str:
     return "\n".join(unique_keep_order(texts))
 
 
+def looks_like_catalog_code(token: str) -> bool:
+    t = normalize_text(token)
+    return re.fullmatch(r"[A-Z]\d{4,}", t) is not None
+
+
 def looks_like_garbage(token: str) -> bool:
     t = normalize_text(token)
 
@@ -193,10 +206,13 @@ def looks_like_garbage(token: str) -> bool:
     if re.fullmatch(r"[0-9/]+", t):
         return True
 
+    if looks_like_catalog_code(t):
+        return True
+
     weird_sequences = [
         "AUAA", "EEE", "SNIR", "ROA", "SLS", "ETSOO", "AOR",
         "VEELS", "PELS", "PEIS", "NORE", "AMAAT", "SEMML",
-        "6888", "EUNEAN", "ASASA", "SEDC", "O82"
+        "6888", "EUNEAN", "ASASA", "SEDC", "O82", "SPYPYPH"
     ]
 
     if any(w in t for w in weird_sequences):
@@ -264,6 +280,12 @@ def canonicalize_token(token: str) -> str:
         "VOLKSWAGENN": "VOLKSWAGEN",
 
         "BEETLF": "BEETLE",
+
+        "HARDNO2E": "HARDNOZE",
+        "HARDNOSE": "HARDNOZE",
+        "HARONOZE": "HARDNOZE",
+        "MERC.": "MERC",
+        "MERCURY.": "MERCURY",
     }
 
     if t in replacements:
@@ -298,6 +320,8 @@ def clean_tokens_from_ocr(ocr_text: str) -> List[str]:
             continue
         if re.fullmatch(r"[0-9/]+", token):
             continue
+        if looks_like_catalog_code(token):
+            continue
         if token not in STRONG_MODEL_TOKENS and looks_like_garbage(token):
             continue
 
@@ -325,6 +349,8 @@ def extract_clean_lines(ocr_text: str) -> List[str]:
             continue
         if any(b in line for b in blocked_substrings):
             continue
+        if looks_like_catalog_code(line):
+            continue
         lines.append(line)
 
     return unique_keep_order(lines)
@@ -337,8 +363,13 @@ def normalized_model_lines(ocr_text: str) -> List[str]:
         parts: List[str] = []
         for token in re.findall(r"[A-Z0-9']{2,}", normalize_text(line)):
             fixed = canonicalize_token(token)
-            if fixed not in BLOCKED_TOKENS and len(fixed) >= 3:
-                parts.append(fixed)
+            if fixed in BLOCKED_TOKENS:
+                continue
+            if len(fixed) < 3:
+                continue
+            if looks_like_catalog_code(fixed):
+                continue
+            parts.append(fixed)
 
         if parts:
             normalized_lines.append(" ".join(parts))
@@ -355,7 +386,11 @@ def extract_model_like_lines(ocr_text: str) -> List[str]:
             good.append(line)
             continue
 
-        if re.search(r"\b\d{2}\b", line) and re.search(r"\b[A-Z]{3,}\b", line):
+        if re.search(r"\b(19\d{2}|20\d{2})\b", line) and re.search(r"\b[A-Z]{3,}\b", line):
+            good.append(line)
+            continue
+
+        if "MERC" in line or "HARDNOZE" in line:
             good.append(line)
 
     return unique_keep_order(good)
