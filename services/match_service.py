@@ -189,7 +189,6 @@ def run_tesseract(img: Image.Image, psm: int) -> str:
 
 
 def extract_ocr_text_by_regions(img: Image.Image) -> str:
-    # Menos regiones = menos tiempo
     regions = [
         ("upper_main", (0.05, 0.05, 0.95, 0.55)),
         ("name_band_top", (0.05, 0.18, 0.95, 0.34)),
@@ -203,7 +202,6 @@ def extract_ocr_text_by_regions(img: Image.Image) -> str:
         region = crop_by_percent(img, box)
         variants = preprocess_for_ocr(region)
 
-        # Menos PSM = menos tiempo
         for variant in variants:
             for psm in [6, 7]:
                 text = run_tesseract(variant, psm=psm)
@@ -434,12 +432,45 @@ def infer_model_phrase(ocr_text: str) -> str:
     if "VOLKSWAGEN" in tokens and "BEETLE" in tokens:
         return "VOLKSWAGEN BEETLE"
 
-    candidate_tokens = [t for t in tokens if not looks_like_garbage(t)]
+    return ""
 
-    if len(candidate_tokens) >= 2:
-        return " ".join(candidate_tokens[:3])
 
-    return candidate_tokens[0] if candidate_tokens else ""
+def has_minimum_ocr_confidence(ocr_text: str, phrase: str) -> bool:
+    tokens = clean_tokens_from_ocr(ocr_text)
+    token_set = set(tokens)
+    phrase_n = normalize_text(phrase)
+
+    if not phrase_n:
+        return False
+
+    if phrase_n == "67 SHELBY GT500":
+        return "SHELBY" in token_set and "GT500" in token_set
+
+    if phrase_n == "SHELBY GT500":
+        return "SHELBY" in token_set and "GT500" in token_set
+
+    if phrase_n == "BEACH BOMB TOO":
+        return "BEACH" in token_set and "BOMB" in token_set and "TOO" in token_set
+
+    if phrase_n == "BEACH BOMB":
+        return "BEACH" in token_set and "BOMB" in token_set
+
+    if phrase_n == "CANDY STRIPER":
+        return "CANDY" in token_set and "STRIPER" in token_set
+
+    if phrase_n == "VOLKSWAGEN BEETLE":
+        return "VOLKSWAGEN" in token_set and "BEETLE" in token_set
+
+    if phrase_n == "BATMAN BEGINS BATMOBILE":
+        return "BATMAN" in token_set and "BATMOBILE" in token_set
+
+    if phrase_n == "BATMOBILE":
+        return "BATMOBILE" in token_set
+
+    if phrase_n == "BATMAN BEGINS":
+        return "BATMAN" in token_set and "BEGINS" in token_set
+
+    return False
 
 
 def build_queries_from_ocr(ocr_text: str) -> List[str]:
@@ -492,7 +523,7 @@ def build_queries_from_ocr(ocr_text: str) -> List[str]:
             "BATMOBILE",
             "hot wheels BATMOBILE",
         ])
-        if "BATMAN BEGINS" in text or "BATMAN" in useful_tokens:
+        if "BATMAN" in useful_tokens:
             queries.extend([
                 "BATMAN BEGINS BATMOBILE",
                 "hot wheels BATMAN BEGINS BATMOBILE",
@@ -503,10 +534,6 @@ def build_queries_from_ocr(ocr_text: str) -> List[str]:
             "VOLKSWAGEN BEETLE",
             "hot wheels VOLKSWAGEN BEETLE",
         ])
-
-    clean_useful = [t for t in useful_tokens if not looks_like_garbage(t)]
-    if clean_useful:
-        queries.append(" ".join(clean_useful[:2]))
 
     if years and phrase:
         queries.append(f"{phrase} {years[0]}")
@@ -552,10 +579,6 @@ def build_relaxed_queries_from_phrase(phrase: str) -> List[str]:
             "VOLKSWAGEN BEETLE",
             "VW BEETLE",
         ])
-
-    tokens = [t for t in phrase_n.split() if t]
-    if len(tokens) >= 2:
-        relaxed.append(" ".join(tokens[:2]))
 
     return unique_keep_order(relaxed)
 
@@ -649,16 +672,20 @@ def choose_top_match(
 
 def build_probable_top_match(ocr_text: str) -> Optional[Dict[str, Any]]:
     phrase = infer_model_phrase(ocr_text)
-    strong_tokens = strong_ocr_tokens(ocr_text)
 
     if not phrase:
         return None
 
-    confidence = 0.55
+    if not has_minimum_ocr_confidence(ocr_text, phrase):
+        return None
+
+    strong_tokens = strong_ocr_tokens(ocr_text)
+
+    confidence = 0.60
     if len(strong_tokens) >= 2:
-        confidence = 0.72
+        confidence = 0.74
     if len(strong_tokens) >= 3:
-        confidence = 0.82
+        confidence = 0.84
 
     return {
         "name": phrase,
@@ -683,7 +710,6 @@ def run_search_round(queries: List[str], limit: int = 6) -> Dict[str, Any]:
             items = result.get("items", [])
             all_items.extend(items)
 
-        # si ya hay suficientes resultados, cortamos
         if len(all_items) >= 10:
             break
 
