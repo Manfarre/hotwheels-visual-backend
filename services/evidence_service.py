@@ -10,7 +10,7 @@ STRONG_MODEL_TOKENS = {
     "SHELBY", "GT500", "CAMARO", "MUSTANG", "CHEVY", "FORD",
     "BEETLE", "VOLKSWAGEN", "CORVETTE", "PORSCHE", "CHARGER",
     "CHALLENGER", "COBRA", "BUS", "SHAKER", "CLASSIC", "TV", "BEGINS",
-    "VAN", "HARDNOZE", "MERC", "MERCURY"
+    "VAN", "HARDNOZE", "MERC", "MERCURY", "MONTE", "CARLO"
 }
 
 BLOCKED_TOKENS = {
@@ -172,7 +172,7 @@ def preprocess_for_ocr_deep(img: Image.Image) -> List[Image.Image]:
     base = gray.resize((max(1, gray.width * 2), max(1, gray.height * 2)))
     variants.append(base)
 
-    high_contrast = ImageEnhance.Contrast(base).enhance(2.2)
+    high_contrast = ImageEnhance.Contrast(base).enhance(2.25)
     variants.append(high_contrast)
 
     sharper = high_contrast.filter(ImageFilter.SHARPEN)
@@ -193,18 +193,25 @@ def run_tesseract(img: Image.Image, psm: int) -> str:
     return pytesseract.image_to_string(img, config=config) or ""
 
 
+def region_transform(region: Image.Image, rotation: int = 0, mirror: bool = False) -> Image.Image:
+    out = region
+    if mirror:
+        out = ImageOps.mirror(out)
+    if rotation != 0:
+        out = out.rotate(rotation, expand=True)
+    return out
+
+
 def run_ocr_regions(
     img: Image.Image,
-    regions: List[Tuple[str, Tuple[float, float, float, float], int]],
+    regions: List[Tuple[str, Tuple[float, float, float, float], int, bool]],
     mode: str,
 ) -> str:
     texts: List[str] = []
 
-    for region_name, box, rotation in regions:
+    for region_name, box, rotation, mirror in regions:
         region = crop_by_percent(img, box)
-
-        if rotation != 0:
-            region = region.rotate(rotation, expand=True)
+        region = region_transform(region, rotation=rotation, mirror=mirror)
 
         if mode == "fast":
             variants = preprocess_for_ocr_fast(region)
@@ -212,23 +219,12 @@ def run_ocr_regions(
             variants = preprocess_for_ocr_deep(region)
 
         if mode == "fast":
-            if "right_strip" in region_name:
-                psms = [7, 6]
-            else:
-                psms = [7, 6]
+            psms = [7, 6]
         else:
             if "right_strip" in region_name:
-                psms = [6, 7, 11, 12]
-            elif region_name in {
-                "bottom_model_name",
-                "center_title",
-                "name_band_top",
-                "name_band_mid",
-                "name_band_low",
-            }:
-                psms = [7, 6, 11]
+                psms = [7, 6, 11, 12]
             else:
-                psms = [6, 7]
+                psms = [7, 6, 11]
 
         for variant in variants:
             for psm in psms:
@@ -335,9 +331,20 @@ def canonicalize_token(token: str) -> str:
 
         "BEETLF": "BEETLE",
 
+        "HARDOZE": "HARDNOZE",
+        "HARDOSE": "HARDNOZE",
         "HARDNO2E": "HARDNOZE",
         "HARDNOSE": "HARDNOZE",
         "HARONOZE": "HARDNOZE",
+
+        "MONTECARLO": "MONTE CARLO",
+        "MONTE": "MONTE",
+        "CARLO": "CARLO",
+
+        "CHEW": "CHEVY",
+        "CHEWY": "CHEVY",
+        "CHEV": "CHEVY",
+
         "MERC.": "MERC",
         "MERCURY.": "MERCURY",
     }
@@ -444,7 +451,7 @@ def extract_model_like_lines(ocr_text: str) -> List[str]:
             good.append(line)
             continue
 
-        if "MERC" in line or "HARDNOZE" in line:
+        if "MERC" in line or "HARDNOZE" in line or "MONTE" in line or "CARLO" in line:
             good.append(line)
 
     return unique_keep_order(good)
@@ -494,33 +501,40 @@ def evaluate_ocr_quality(
 
 def extract_ocr_text_two_phase(img: Image.Image) -> Tuple[str, str]:
     fast_regions = [
-        ("center_title", (0.12, 0.16, 0.90, 0.45), 0),
-        ("name_band_mid", (0.05, 0.28, 0.95, 0.44), 0),
-        ("bottom_model_name", (0.15, 0.66, 0.86, 0.86), 0),
-        ("right_strip_full_r90", (0.78, 0.08, 0.995, 0.96), 90),
-        ("right_strip_mid_r90", (0.80, 0.28, 0.995, 0.92), 90),
+        ("center_title", (0.12, 0.16, 0.90, 0.45), 0, False),
+        ("name_band_mid", (0.05, 0.28, 0.95, 0.44), 0, False),
+        ("bottom_model_name", (0.15, 0.66, 0.86, 0.86), 0, False),
+
+        ("right_strip_precise_r90", (0.86, 0.60, 0.995, 0.98), 90, False),
+        ("right_strip_precise_r270", (0.86, 0.60, 0.995, 0.98), 270, False),
+        ("right_strip_precise_mirror_r90", (0.86, 0.60, 0.995, 0.98), 90, True),
+        ("right_strip_mid_r90", (0.84, 0.42, 0.995, 0.98), 90, False),
     ]
 
     deep_regions = [
-        ("full", (0.00, 0.00, 1.00, 1.00), 0),
-        ("upper_main", (0.05, 0.05, 0.95, 0.58), 0),
-        ("center_title", (0.12, 0.16, 0.90, 0.45), 0),
-        ("name_band_top", (0.05, 0.18, 0.95, 0.34), 0),
-        ("name_band_mid", (0.05, 0.28, 0.95, 0.44), 0),
-        ("name_band_low", (0.05, 0.36, 0.95, 0.52), 0),
-        ("bottom_model_name", (0.15, 0.66, 0.86, 0.86), 0),
+        ("full", (0.00, 0.00, 1.00, 1.00), 0, False),
+        ("upper_main", (0.05, 0.05, 0.95, 0.58), 0, False),
+        ("center_title", (0.12, 0.16, 0.90, 0.45), 0, False),
+        ("name_band_top", (0.05, 0.18, 0.95, 0.34), 0, False),
+        ("name_band_mid", (0.05, 0.28, 0.95, 0.44), 0, False),
+        ("name_band_low", (0.05, 0.36, 0.95, 0.52), 0, False),
+        ("bottom_model_name", (0.15, 0.66, 0.86, 0.86), 0, False),
 
-        ("right_strip_full", (0.78, 0.08, 0.995, 0.96), 0),
-        ("right_strip_full_r90", (0.78, 0.08, 0.995, 0.96), 90),
-        ("right_strip_full_r270", (0.78, 0.08, 0.995, 0.96), 270),
+        ("right_strip_precise", (0.86, 0.60, 0.995, 0.98), 0, False),
+        ("right_strip_precise_r90", (0.86, 0.60, 0.995, 0.98), 90, False),
+        ("right_strip_precise_r270", (0.86, 0.60, 0.995, 0.98), 270, False),
+        ("right_strip_precise_mirror_r90", (0.86, 0.60, 0.995, 0.98), 90, True),
+        ("right_strip_precise_mirror_r270", (0.86, 0.60, 0.995, 0.98), 270, True),
 
-        ("right_strip_mid", (0.80, 0.28, 0.995, 0.92), 0),
-        ("right_strip_mid_r90", (0.80, 0.28, 0.995, 0.92), 90),
-        ("right_strip_mid_r270", (0.80, 0.28, 0.995, 0.92), 270),
+        ("right_strip_full", (0.82, 0.18, 0.995, 0.98), 0, False),
+        ("right_strip_full_r90", (0.82, 0.18, 0.995, 0.98), 90, False),
+        ("right_strip_full_r270", (0.82, 0.18, 0.995, 0.98), 270, False),
+        ("right_strip_full_mirror_r90", (0.82, 0.18, 0.995, 0.98), 90, True),
 
-        ("right_strip_top", (0.80, 0.12, 0.995, 0.55), 0),
-        ("right_strip_top_r90", (0.80, 0.12, 0.995, 0.55), 90),
-        ("right_strip_top_r270", (0.80, 0.12, 0.995, 0.55), 270),
+        ("right_strip_mid", (0.84, 0.42, 0.995, 0.98), 0, False),
+        ("right_strip_mid_r90", (0.84, 0.42, 0.995, 0.98), 90, False),
+        ("right_strip_mid_r270", (0.84, 0.42, 0.995, 0.98), 270, False),
+        ("right_strip_mid_mirror_r90", (0.84, 0.42, 0.995, 0.98), 90, True),
     ]
 
     fast_text = run_ocr_regions(img, fast_regions, mode="fast")
@@ -564,6 +578,7 @@ async def build_evidence_from_upload(file) -> Dict[str, Any]:
                 "likelyInsufficient": True,
                 "warnings": ["image_processing_error"],
             },
+            "ocrMode": "error",
         }
 
     processed_width, processed_height = img.size
