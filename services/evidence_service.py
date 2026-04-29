@@ -138,11 +138,17 @@ def preprocess_for_ocr(img: Image.Image) -> List[Image.Image]:
     base = gray.resize((max(1, gray.width * 2), max(1, gray.height * 2)))
     variants.append(base)
 
-    high_contrast = ImageEnhance.Contrast(base).enhance(2.0)
+    high_contrast = ImageEnhance.Contrast(base).enhance(2.2)
     variants.append(high_contrast)
 
-    bw = high_contrast.point(lambda p: 255 if p > 155 else 0)
-    variants.append(bw)
+    sharper = high_contrast.filter(ImageFilter.SHARPEN)
+    variants.append(sharper)
+
+    bw1 = sharper.point(lambda p: 255 if p > 145 else 0)
+    variants.append(bw1)
+
+    bw2 = sharper.point(lambda p: 255 if p > 170 else 0)
+    variants.append(bw2)
 
     return variants
 
@@ -155,35 +161,52 @@ def run_tesseract(img: Image.Image, psm: int) -> str:
 
 def extract_ocr_text_by_regions(img: Image.Image) -> str:
     regions = [
-        ("full", (0.00, 0.00, 1.00, 1.00), False),
-        ("upper_main", (0.05, 0.05, 0.95, 0.55), False),
-        ("center_title", (0.15, 0.18, 0.88, 0.42), False),
-        ("name_band_top", (0.05, 0.18, 0.95, 0.34), False),
-        ("name_band_mid", (0.05, 0.28, 0.95, 0.42), False),
-        ("name_band_low", (0.05, 0.35, 0.95, 0.50), False),
-        ("right_vertical", (0.84, 0.10, 0.99, 0.90), False),
-        ("right_vertical_rotated", (0.84, 0.10, 0.99, 0.90), True),
-        ("bottom_model_name", (0.18, 0.67, 0.82, 0.84), False),
+        ("full", (0.00, 0.00, 1.00, 1.00), 0),
+        ("upper_main", (0.05, 0.05, 0.95, 0.58), 0),
+        ("center_title", (0.12, 0.16, 0.90, 0.45), 0),
+        ("name_band_top", (0.05, 0.18, 0.95, 0.34), 0),
+        ("name_band_mid", (0.05, 0.28, 0.95, 0.44), 0),
+        ("name_band_low", (0.05, 0.36, 0.95, 0.52), 0),
+
+        ("bottom_model_name", (0.15, 0.66, 0.86, 0.86), 0),
+
+        ("right_strip_full", (0.78, 0.08, 0.995, 0.96), 0),
+        ("right_strip_full_r90", (0.78, 0.08, 0.995, 0.96), 90),
+        ("right_strip_full_r270", (0.78, 0.08, 0.995, 0.96), 270),
+
+        ("right_strip_mid", (0.80, 0.28, 0.995, 0.92), 0),
+        ("right_strip_mid_r90", (0.80, 0.28, 0.995, 0.92), 90),
+        ("right_strip_mid_r270", (0.80, 0.28, 0.995, 0.92), 270),
+
+        ("right_strip_top", (0.80, 0.12, 0.995, 0.55), 0),
+        ("right_strip_top_r90", (0.80, 0.12, 0.995, 0.55), 90),
+        ("right_strip_top_r270", (0.80, 0.12, 0.995, 0.55), 270),
     ]
 
     texts: List[str] = []
 
-    for region_name, box, rotate in regions:
+    for region_name, box, rotation in regions:
         region = crop_by_percent(img, box)
 
-        if rotate:
-            region = region.rotate(90, expand=True)
+        if rotation != 0:
+            region = region.rotate(rotation, expand=True)
 
         variants = preprocess_for_ocr(region)
 
-        for variant in variants:
-            if region_name in {"bottom_model_name", "center_title", "name_band_top", "name_band_mid", "name_band_low"}:
-                psms = [7, 6]
-            elif region_name in {"right_vertical", "right_vertical_rotated"}:
-                psms = [6, 7, 11]
-            else:
-                psms = [6, 7]
+        if "right_strip" in region_name:
+            psms = [6, 7, 11, 12]
+        elif region_name in {
+            "bottom_model_name",
+            "center_title",
+            "name_band_top",
+            "name_band_mid",
+            "name_band_low",
+        }:
+            psms = [7, 6, 11]
+        else:
+            psms = [6, 7]
 
+        for variant in variants:
             for psm in psms:
                 text = run_tesseract(variant, psm=psm)
                 if text and text.strip():
@@ -194,7 +217,14 @@ def extract_ocr_text_by_regions(img: Image.Image) -> str:
 
 def looks_like_catalog_code(token: str) -> bool:
     t = normalize_text(token)
-    return re.fullmatch(r"[A-Z]\d{4,}", t) is not None
+
+    if re.fullmatch(r"[A-Z]{1,3}\d{3,5}", t):
+        return True
+
+    if re.fullmatch(r"\d{3,5}[A-Z]{1,3}", t):
+        return True
+
+    return False
 
 
 def looks_like_garbage(token: str) -> bool:
