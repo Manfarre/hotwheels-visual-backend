@@ -59,7 +59,7 @@ def extract_years(text: str) -> List[str]:
     return unique_keep_order(years)
 
 
-def downscale_image_for_processing(img: Image.Image, max_side: int = 1400) -> Image.Image:
+def resize_large_image_for_processing(img: Image.Image, max_side: int = 1400) -> Image.Image:
     w, h = img.size
     max_current = max(w, h)
 
@@ -69,6 +69,24 @@ def downscale_image_for_processing(img: Image.Image, max_side: int = 1400) -> Im
     scale = max_side / float(max_current)
     new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
     return img.resize(new_size, Image.Resampling.LANCZOS)
+
+
+def upscale_small_image_for_processing(img: Image.Image, min_side: int = 900) -> Image.Image:
+    w, h = img.size
+    min_current = min(w, h)
+
+    if min_current >= min_side:
+        return img
+
+    scale = min_side / float(min_current)
+    new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
+    return img.resize(new_size, Image.Resampling.LANCZOS)
+
+
+def prepare_image_for_processing(img: Image.Image) -> Image.Image:
+    img = upscale_small_image_for_processing(img, min_side=900)
+    img = resize_large_image_for_processing(img, max_side=1600)
+    return img
 
 
 def color_ratio(img: Image.Image, predicate) -> float:
@@ -167,7 +185,6 @@ def extract_ocr_text_by_regions(img: Image.Image) -> str:
         ("name_band_top", (0.05, 0.18, 0.95, 0.34), 0),
         ("name_band_mid", (0.05, 0.28, 0.95, 0.44), 0),
         ("name_band_low", (0.05, 0.36, 0.95, 0.52), 0),
-
         ("bottom_model_name", (0.15, 0.66, 0.86, 0.86), 0),
 
         ("right_strip_full", (0.78, 0.08, 0.995, 0.96), 0),
@@ -432,12 +449,49 @@ def strong_ocr_tokens(ocr_text: str) -> List[str]:
     return unique_keep_order(strong) if strong else tokens[:5]
 
 
+def evaluate_ocr_quality(
+    original_width: int,
+    original_height: int,
+    ocr_text: str,
+    clean_tokens: List[str],
+    model_lines: List[str],
+) -> Dict[str, Any]:
+    warnings: List[str] = []
+
+    if original_width < 350 or original_height < 500:
+        warnings.append("input_image_small")
+
+    useful_token_count = len(clean_tokens)
+    model_line_count = len(model_lines)
+    ocr_char_count = len((ocr_text or "").strip())
+
+    likely_insufficient = False
+
+    if useful_token_count == 0 and model_line_count == 0:
+        likely_insufficient = True
+
+    if ocr_char_count < 40 and useful_token_count <= 1:
+        likely_insufficient = True
+
+    if original_width < 320 and useful_token_count <= 2 and model_line_count == 0:
+        likely_insufficient = True
+
+    if likely_insufficient:
+        warnings.append("ocr_text_insufficient")
+
+    return {
+        "likelyInsufficient": likely_insufficient,
+        "warnings": warnings,
+    }
+
+
 async def build_evidence_from_upload(file) -> Dict[str, Any]:
     content = await file.read()
 
     try:
-        img = Image.open(BytesIO(content)).convert("RGB")
-        img = downscale_image_for_processing(img, max_side=1400)
+        original_img = Image.open(BytesIO(content)).convert("RGB")
+        original_width, original_height = original_img.size
+        img = prepare_image_for_processing(original_img)
     except Exception as e:
         return {
             "success": False,
@@ -450,9 +504,13 @@ async def build_evidence_from_upload(file) -> Dict[str, Any]:
             "yearsDetected": [],
             "imageInfo": {},
             "visualSignals": {},
+            "quality": {
+                "likelyInsufficient": True,
+                "warnings": ["image_processing_error"],
+            },
         }
 
-    width, height = img.size
+    processed_width, processed_height = img.size
     visual = visual_signals(img)
 
     try:
@@ -466,6 +524,13 @@ async def build_evidence_from_upload(file) -> Dict[str, Any]:
     strong_tokens = strong_ocr_tokens(ocr_text)
     model_lines = extract_model_like_lines(ocr_text)
     years_detected = extract_years(ocr_text)
+    quality = evaluate_ocr_quality(
+        original_width=original_width,
+        original_height=original_height,
+        ocr_text=ocr_text,
+        clean_tokens=clean_tokens,
+        model_lines=model_lines,
+    )
 
     return {
         "success": True,
@@ -477,10 +542,13 @@ async def build_evidence_from_upload(file) -> Dict[str, Any]:
         "modelLines": model_lines,
         "yearsDetected": years_detected,
         "imageInfo": {
-            "width": width,
-            "height": height,
+            "width": original_width,
+            "height": original_height,
+            "processedWidth": processed_width,
+            "processedHeight": processed_height,
             "filename": getattr(file, "filename", ""),
             "contentType": getattr(file, "content_type", ""),
         },
         "visualSignals": visual,
+        "quality": quality,
     }
