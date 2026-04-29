@@ -146,7 +146,23 @@ def crop_by_percent(img: Image.Image, box: Tuple[float, float, float, float]) ->
     return img.crop((left, top, right, bottom))
 
 
-def preprocess_for_ocr(img: Image.Image) -> List[Image.Image]:
+def preprocess_for_ocr_fast(img: Image.Image) -> List[Image.Image]:
+    variants: List[Image.Image] = []
+
+    gray = ImageOps.grayscale(img)
+    gray = ImageOps.autocontrast(gray)
+    gray = gray.filter(ImageFilter.SHARPEN)
+
+    base = gray.resize((max(1, gray.width * 2), max(1, gray.height * 2)))
+    variants.append(base)
+
+    high_contrast = ImageEnhance.Contrast(base).enhance(2.0)
+    variants.append(high_contrast)
+
+    return variants
+
+
+def preprocess_for_ocr_deep(img: Image.Image) -> List[Image.Image]:
     variants: List[Image.Image] = []
 
     gray = ImageOps.grayscale(img)
@@ -177,29 +193,11 @@ def run_tesseract(img: Image.Image, psm: int) -> str:
     return pytesseract.image_to_string(img, config=config) or ""
 
 
-def extract_ocr_text_by_regions(img: Image.Image) -> str:
-    regions = [
-        ("full", (0.00, 0.00, 1.00, 1.00), 0),
-        ("upper_main", (0.05, 0.05, 0.95, 0.58), 0),
-        ("center_title", (0.12, 0.16, 0.90, 0.45), 0),
-        ("name_band_top", (0.05, 0.18, 0.95, 0.34), 0),
-        ("name_band_mid", (0.05, 0.28, 0.95, 0.44), 0),
-        ("name_band_low", (0.05, 0.36, 0.95, 0.52), 0),
-        ("bottom_model_name", (0.15, 0.66, 0.86, 0.86), 0),
-
-        ("right_strip_full", (0.78, 0.08, 0.995, 0.96), 0),
-        ("right_strip_full_r90", (0.78, 0.08, 0.995, 0.96), 90),
-        ("right_strip_full_r270", (0.78, 0.08, 0.995, 0.96), 270),
-
-        ("right_strip_mid", (0.80, 0.28, 0.995, 0.92), 0),
-        ("right_strip_mid_r90", (0.80, 0.28, 0.995, 0.92), 90),
-        ("right_strip_mid_r270", (0.80, 0.28, 0.995, 0.92), 270),
-
-        ("right_strip_top", (0.80, 0.12, 0.995, 0.55), 0),
-        ("right_strip_top_r90", (0.80, 0.12, 0.995, 0.55), 90),
-        ("right_strip_top_r270", (0.80, 0.12, 0.995, 0.55), 270),
-    ]
-
+def run_ocr_regions(
+    img: Image.Image,
+    regions: List[Tuple[str, Tuple[float, float, float, float], int]],
+    mode: str,
+) -> str:
     texts: List[str] = []
 
     for region_name, box, rotation in regions:
@@ -208,20 +206,29 @@ def extract_ocr_text_by_regions(img: Image.Image) -> str:
         if rotation != 0:
             region = region.rotate(rotation, expand=True)
 
-        variants = preprocess_for_ocr(region)
-
-        if "right_strip" in region_name:
-            psms = [6, 7, 11, 12]
-        elif region_name in {
-            "bottom_model_name",
-            "center_title",
-            "name_band_top",
-            "name_band_mid",
-            "name_band_low",
-        }:
-            psms = [7, 6, 11]
+        if mode == "fast":
+            variants = preprocess_for_ocr_fast(region)
         else:
-            psms = [6, 7]
+            variants = preprocess_for_ocr_deep(region)
+
+        if mode == "fast":
+            if "right_strip" in region_name:
+                psms = [7, 6]
+            else:
+                psms = [7, 6]
+        else:
+            if "right_strip" in region_name:
+                psms = [6, 7, 11, 12]
+            elif region_name in {
+                "bottom_model_name",
+                "center_title",
+                "name_band_top",
+                "name_band_mid",
+                "name_band_low",
+            }:
+                psms = [7, 6, 11]
+            else:
+                psms = [6, 7]
 
         for variant in variants:
             for psm in psms:
@@ -485,6 +492,55 @@ def evaluate_ocr_quality(
     }
 
 
+def extract_ocr_text_two_phase(img: Image.Image) -> Tuple[str, str]:
+    fast_regions = [
+        ("center_title", (0.12, 0.16, 0.90, 0.45), 0),
+        ("name_band_mid", (0.05, 0.28, 0.95, 0.44), 0),
+        ("bottom_model_name", (0.15, 0.66, 0.86, 0.86), 0),
+        ("right_strip_full_r90", (0.78, 0.08, 0.995, 0.96), 90),
+        ("right_strip_mid_r90", (0.80, 0.28, 0.995, 0.92), 90),
+    ]
+
+    deep_regions = [
+        ("full", (0.00, 0.00, 1.00, 1.00), 0),
+        ("upper_main", (0.05, 0.05, 0.95, 0.58), 0),
+        ("center_title", (0.12, 0.16, 0.90, 0.45), 0),
+        ("name_band_top", (0.05, 0.18, 0.95, 0.34), 0),
+        ("name_band_mid", (0.05, 0.28, 0.95, 0.44), 0),
+        ("name_band_low", (0.05, 0.36, 0.95, 0.52), 0),
+        ("bottom_model_name", (0.15, 0.66, 0.86, 0.86), 0),
+
+        ("right_strip_full", (0.78, 0.08, 0.995, 0.96), 0),
+        ("right_strip_full_r90", (0.78, 0.08, 0.995, 0.96), 90),
+        ("right_strip_full_r270", (0.78, 0.08, 0.995, 0.96), 270),
+
+        ("right_strip_mid", (0.80, 0.28, 0.995, 0.92), 0),
+        ("right_strip_mid_r90", (0.80, 0.28, 0.995, 0.92), 90),
+        ("right_strip_mid_r270", (0.80, 0.28, 0.995, 0.92), 270),
+
+        ("right_strip_top", (0.80, 0.12, 0.995, 0.55), 0),
+        ("right_strip_top_r90", (0.80, 0.12, 0.995, 0.55), 90),
+        ("right_strip_top_r270", (0.80, 0.12, 0.995, 0.55), 270),
+    ]
+
+    fast_text = run_ocr_regions(img, fast_regions, mode="fast")
+    fast_clean_tokens = clean_tokens_from_ocr(fast_text)
+    fast_model_lines = extract_model_like_lines(fast_text)
+
+    fast_ok = (
+        len(fast_clean_tokens) >= 2
+        or len(fast_model_lines) >= 1
+        or len(normalize_text(fast_text)) >= 80
+    )
+
+    if fast_ok:
+        return fast_text, "fast"
+
+    deep_text = run_ocr_regions(img, deep_regions, mode="deep")
+    merged = "\n".join(unique_keep_order([fast_text, deep_text]))
+    return merged, "deep"
+
+
 async def build_evidence_from_upload(file) -> Dict[str, Any]:
     content = await file.read()
 
@@ -514,10 +570,11 @@ async def build_evidence_from_upload(file) -> Dict[str, Any]:
     visual = visual_signals(img)
 
     try:
-        ocr_text = extract_ocr_text_by_regions(img)
+        ocr_text, ocr_mode = extract_ocr_text_two_phase(img)
         ocr_error = ""
     except Exception as e:
         ocr_text = ""
+        ocr_mode = "error"
         ocr_error = str(e)
 
     clean_tokens = clean_tokens_from_ocr(ocr_text)
@@ -551,4 +608,5 @@ async def build_evidence_from_upload(file) -> Dict[str, Any]:
         },
         "visualSignals": visual,
         "quality": quality,
+        "ocrMode": ocr_mode,
     }
