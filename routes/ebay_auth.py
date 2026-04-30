@@ -7,11 +7,26 @@ from config import EBAY_CLIENT_ID, EBAY_ENV
 router = APIRouter(prefix="/ebay", tags=["eBay Auth"])
 
 
+def _safe_token_status(token_result: dict) -> dict:
+    """
+    Devuelve solo metadatos seguros del token.
+    Nunca expone access_token ni raw payload al cliente.
+    """
+    return {
+        "success": True,
+        "env": EBAY_ENV,
+        "client_id_loaded": bool(EBAY_CLIENT_ID),
+        "token_type": token_result.get("token_type", ""),
+        "expires_in": token_result.get("expires_in", 0),
+        "message": "Token de aplicación obtenido correctamente.",
+    }
+
+
 @router.get("/start")
 def ebay_start():
     """
-    Obtiene un token de aplicación de eBay.
-    Sirve para validar que las credenciales cargadas en Render funcionan.
+    Obtiene un token de aplicación de eBay solo para validar credenciales.
+    La respuesta no expone access_token ni raw payload al cliente.
     """
     token_result = get_application_token()
 
@@ -28,14 +43,7 @@ def ebay_start():
 
     return JSONResponse(
         status_code=200,
-        content={
-            "success": True,
-            "env": EBAY_ENV,
-            "client_id_loaded": bool(EBAY_CLIENT_ID),
-            "token_type": token_result.get("token_type", ""),
-            "expires_in": token_result.get("expires_in", 0),
-            "access_token": token_result.get("access_token", ""),
-        },
+        content=_safe_token_status(token_result),
     )
 
 
