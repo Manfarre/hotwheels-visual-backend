@@ -545,7 +545,7 @@ def evaluate_ocr_quality(
         likely_insufficient = True
         warnings.append("no_strong_model_line")
 
-    if model_line_count == 0 and useful_token_count >= 8 and strong_token_ratio < 0.2:
+    if model_line_count == 0 and useful_token_count >= 8 and len(strong_token_hits) <= 1 and strong_token_ratio < 0.2:
         likely_insufficient = True
         warnings.append("ocr_noise_dominant")
 
@@ -563,6 +563,9 @@ def extract_ocr_text_two_phase(img: Image.Image) -> Tuple[str, str]:
         ("center_title", (0.12, 0.16, 0.90, 0.45), 0, False),
         ("name_band_mid", (0.05, 0.28, 0.95, 0.44), 0, False),
         ("bottom_model_name", (0.15, 0.66, 0.86, 0.86), 0, False),
+        ("lower_name_full", (0.20, 0.88, 0.82, 0.98), 0, False),
+        ("lower_name_tight", (0.28, 0.90, 0.74, 0.975), 0, False),
+        ("right_vertical_r270", (0.84, 0.58, 0.995, 0.98), 270, False),
         ("right_card_strip_r90", (0.80, 0.48, 0.995, 0.98), 90, False),
         ("right_card_strip_r270", (0.80, 0.48, 0.995, 0.98), 270, False),
         ("right_card_strip_mirror_r90", (0.80, 0.48, 0.995, 0.98), 90, True),
@@ -582,10 +585,16 @@ def extract_ocr_text_two_phase(img: Image.Image) -> Tuple[str, str]:
         ("name_band_mid", (0.05, 0.28, 0.95, 0.44), 0, False),
         ("name_band_low", (0.05, 0.36, 0.95, 0.52), 0, False),
         ("bottom_model_name", (0.15, 0.66, 0.86, 0.86), 0, False),
+        ("lower_name_full", (0.20, 0.88, 0.82, 0.98), 0, False),
+        ("lower_name_tight", (0.28, 0.90, 0.74, 0.975), 0, False),
+        ("lower_name_tighter", (0.30, 0.905, 0.73, 0.975), 0, False),
         ("bottom_right_badge", (0.72, 0.58, 0.96, 0.90), 0, False),
         ("bottom_right_badge_r90", (0.72, 0.58, 0.96, 0.90), 90, False),
         ("bottom_right_badge_r270", (0.72, 0.58, 0.96, 0.90), 270, False),
         ("bottom_right_badge_mirror_r90", (0.72, 0.58, 0.96, 0.90), 90, True),
+        ("right_vertical", (0.84, 0.58, 0.995, 0.98), 0, False),
+        ("right_vertical_r90", (0.84, 0.58, 0.995, 0.98), 90, False),
+        ("right_vertical_r270", (0.84, 0.58, 0.995, 0.98), 270, False),
 
         ("right_strip_precise", (0.86, 0.60, 0.995, 0.98), 0, False),
         ("right_strip_precise_r90", (0.86, 0.60, 0.995, 0.98), 90, False),
