@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+.deps/
+bottom_model_name.png
+bottom_right_badge.png
+name_band_mid.png
+right_card_strip.png

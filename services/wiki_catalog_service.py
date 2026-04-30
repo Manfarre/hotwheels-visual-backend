@@ -25,6 +25,16 @@ WEAK_SINGLE_TOKENS = {
     "BEETLE", "BATMOBILE", "JACK", "SANTA"
 }
 
+PACK_OR_SERIES_TERMS = {
+    "SET", "SERIES", "COLLECTION", "5-PACK", "5 PACK", "3-PACK", "3 PACK",
+    "4-CAR", "4 CAR", "2-PACK", "2 PACK", "BOX SET", "PLAYSET"
+}
+
+GENERIC_CONTEXT_TOKENS = {
+    "CLASSIC", "CLASSICS", "BUS", "BUSES", "FORD", "CHEVY", "MUSTANG",
+    "CAMARO", "BEETLE", "CAR", "CARS", "HOT"
+}
+
 
 def _session() -> requests.Session:
     session = requests.Session()
@@ -125,23 +135,32 @@ def build_wiki_queries(evidence: Dict[str, Any]) -> List[str]:
     if "SANTA" in token_set and "JACK" in token_set:
         queries.insert(0, "SANTA JACK")
 
-    if "HARDNOZE" in token_set and "MERC" in token_set:
+    if "HARDNOZE" in token_set and "MERCURY" in token_set:
+        queries.insert(0, "HARDNOZE MERCURY")
+        queries.insert(1, "HARDNOZE MERC")
+    elif "HARDNOZE" in token_set and "MERC" in token_set:
         queries.insert(0, "HARDNOZE MERC")
 
     if "VOLKSWAGEN" in token_set and "BEETLE" in token_set:
         queries.insert(0, "VOLKSWAGEN BEETLE")
 
     if "SHELBY" in token_set and "GT500" in token_set:
-        queries.insert(0, "67 SHELBY GT500")
-        queries.insert(1, "SHELBY GT500")
+        if "67" in token_set:
+            queries.insert(0, "67 SHELBY GT500")
+        queries.insert(0, "SHELBY GT500")
 
     if "BEACH" in token_set and "BOMB" in token_set and "TOO" in token_set:
         queries.insert(0, "BEACH BOMB TOO")
     elif "BEACH" in token_set and "BOMB" in token_set:
         queries.insert(0, "BEACH BOMB")
 
-    if "BATMAN" in token_set and "BATMOBILE" in token_set:
+    if "CLASSIC" in token_set and "TV" in token_set and "BATMOBILE" in token_set:
+        queries.insert(0, "CLASSIC TV SERIES BATMOBILE")
+
+    if "BATMAN" in token_set and "BEGINS" in token_set and "BATMOBILE" in token_set:
         queries.insert(0, "BATMAN BEGINS BATMOBILE")
+    elif "BATMAN" in token_set and "BATMOBILE" in token_set:
+        queries.insert(0, "BATMAN BATMOBILE")
     elif "BATMOBILE" in token_set:
         queries.insert(0, "BATMOBILE")
 
@@ -326,6 +345,8 @@ def score_wiki_candidate(candidate: Dict[str, Any], evidence: Dict[str, Any], qu
         score -= 3.0
     if "SERIES" in title_n and len(query_words) <= 2:
         score -= 2.0
+    if any(term in title_n for term in PACK_OR_SERIES_TERMS):
+        score -= 4.5
 
     # Si la query es de una palabra débil, bajar mucho
     if len(query_words) == 1 and query_words[0] in WEAK_SINGLE_TOKENS:
@@ -353,6 +374,13 @@ def _is_candidate_strong_enough(candidate: Optional[Dict[str, Any]], query: str)
 
     query_words = [w for w in query_n.split() if w]
     matched_words = sum(1 for w in query_words if w in title_n)
+
+    if any(term in title_n for term in PACK_OR_SERIES_TERMS):
+        return False
+
+    generic_query_words = [w for w in query_words if w in GENERIC_CONTEXT_TOKENS]
+    if len(query_words) <= 3 and len(generic_query_words) == len(query_words):
+        return False
 
     # Reglas mínimas
     if len(query_words) >= 2:

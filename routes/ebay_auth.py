@@ -32,9 +32,8 @@ def ebay_start():
             "success": True,
             "env": EBAY_ENV,
             "client_id_loaded": bool(EBAY_CLIENT_ID),
-            "token_type": token_result.get("token_type", ""),
             "expires_in": token_result.get("expires_in", 0),
-            "access_token": token_result.get("access_token", ""),
+            "message": "Credenciales de eBay validadas correctamente.",
         },
     )
 

@@ -29,6 +29,26 @@ BLOCKED_TOKENS = {
     "LIFE", "HOW", "HOR", "HOY", "VIL", "REE", "FIRST", "EDITIONS"
 }
 
+GENERIC_MODEL_GUESS_TOKENS = {
+    "CAMARO", "MUSTANG", "CHEVY", "FORD", "CORVETTE", "CHARGER",
+    "CHALLENGER", "PORSCHE", "NISSAN", "HONDA", "TOYOTA", "TESLA"
+}
+
+KNOWN_STRONG_PHRASES = {
+    "CLASSIC TV SERIES BATMOBILE",
+    "BATMAN BEGINS BATMOBILE",
+    "BEACH BOMB TOO",
+    "BEACH BOMB",
+    "CANDY STRIPER",
+    "67 SHELBY GT500",
+    "SHELBY GT500",
+    "VOLKSWAGEN BEETLE",
+    "BONE SHAKER",
+    "DRAG BUS",
+    "HARDNOZE MERC",
+    "MONTE CARLO",
+}
+
 
 def normalize_text(text: str) -> str:
     if not text:
@@ -438,12 +458,35 @@ def normalized_model_lines(ocr_text: str) -> List[str]:
     return unique_keep_order(normalized_lines)
 
 
+def strong_token_count_in_line(line: str) -> int:
+    tokens = [t for t in normalize_text(line).split() if t]
+    return sum(1 for token in tokens if token in STRONG_MODEL_TOKENS)
+
+
+def is_strong_model_line(line: str) -> bool:
+    normalized = normalize_text(line)
+    if not normalized:
+        return False
+
+    if any(phrase in normalized for phrase in KNOWN_STRONG_PHRASES):
+        return True
+
+    strong_count = strong_token_count_in_line(normalized)
+    if strong_count >= 2:
+        return True
+
+    if strong_count >= 1 and re.search(r"\b(19\d{2}|20\d{2})\b", normalized):
+        return True
+
+    return False
+
+
 def extract_model_like_lines(ocr_text: str) -> List[str]:
     lines = normalized_model_lines(ocr_text)
 
     good: List[str] = []
     for line in lines:
-        if any(word in line for word in STRONG_MODEL_TOKENS):
+        if is_strong_model_line(line):
             good.append(line)
             continue
 
@@ -490,6 +533,22 @@ def evaluate_ocr_quality(
     if original_width < 320 and useful_token_count <= 2 and model_line_count == 0:
         likely_insufficient = True
 
+    generic_hits = [t for t in clean_tokens if t in GENERIC_MODEL_GUESS_TOKENS]
+    if model_line_count == 0 and useful_token_count <= 3 and generic_hits:
+        likely_insufficient = True
+        warnings.append("generic_tokens_without_model_line")
+
+    strong_token_hits = [t for t in clean_tokens if t in STRONG_MODEL_TOKENS]
+    strong_token_ratio = (len(strong_token_hits) / useful_token_count) if useful_token_count else 0.0
+
+    if model_line_count == 0 and len(strong_token_hits) <= 1:
+        likely_insufficient = True
+        warnings.append("no_strong_model_line")
+
+    if model_line_count == 0 and useful_token_count >= 8 and len(strong_token_hits) <= 1 and strong_token_ratio < 0.2:
+        likely_insufficient = True
+        warnings.append("ocr_noise_dominant")
+
     if likely_insufficient:
         warnings.append("ocr_text_insufficient")
 
@@ -504,6 +563,13 @@ def extract_ocr_text_two_phase(img: Image.Image) -> Tuple[str, str]:
         ("center_title", (0.12, 0.16, 0.90, 0.45), 0, False),
         ("name_band_mid", (0.05, 0.28, 0.95, 0.44), 0, False),
         ("bottom_model_name", (0.15, 0.66, 0.86, 0.86), 0, False),
+        ("lower_name_full", (0.20, 0.88, 0.82, 0.98), 0, False),
+        ("lower_name_tight", (0.28, 0.90, 0.74, 0.975), 0, False),
+        ("right_vertical_r270", (0.84, 0.58, 0.995, 0.98), 270, False),
+        ("right_card_strip_r90", (0.80, 0.48, 0.995, 0.98), 90, False),
+        ("right_card_strip_r270", (0.80, 0.48, 0.995, 0.98), 270, False),
+        ("right_card_strip_mirror_r90", (0.80, 0.48, 0.995, 0.98), 90, True),
+        ("bottom_right_badge_r90", (0.72, 0.58, 0.96, 0.90), 90, False),
 
         ("right_strip_precise_r90", (0.86, 0.60, 0.995, 0.98), 90, False),
         ("right_strip_precise_r270", (0.86, 0.60, 0.995, 0.98), 270, False),
@@ -519,12 +585,28 @@ def extract_ocr_text_two_phase(img: Image.Image) -> Tuple[str, str]:
         ("name_band_mid", (0.05, 0.28, 0.95, 0.44), 0, False),
         ("name_band_low", (0.05, 0.36, 0.95, 0.52), 0, False),
         ("bottom_model_name", (0.15, 0.66, 0.86, 0.86), 0, False),
+        ("lower_name_full", (0.20, 0.88, 0.82, 0.98), 0, False),
+        ("lower_name_tight", (0.28, 0.90, 0.74, 0.975), 0, False),
+        ("lower_name_tighter", (0.30, 0.905, 0.73, 0.975), 0, False),
+        ("bottom_right_badge", (0.72, 0.58, 0.96, 0.90), 0, False),
+        ("bottom_right_badge_r90", (0.72, 0.58, 0.96, 0.90), 90, False),
+        ("bottom_right_badge_r270", (0.72, 0.58, 0.96, 0.90), 270, False),
+        ("bottom_right_badge_mirror_r90", (0.72, 0.58, 0.96, 0.90), 90, True),
+        ("right_vertical", (0.84, 0.58, 0.995, 0.98), 0, False),
+        ("right_vertical_r90", (0.84, 0.58, 0.995, 0.98), 90, False),
+        ("right_vertical_r270", (0.84, 0.58, 0.995, 0.98), 270, False),
 
         ("right_strip_precise", (0.86, 0.60, 0.995, 0.98), 0, False),
         ("right_strip_precise_r90", (0.86, 0.60, 0.995, 0.98), 90, False),
         ("right_strip_precise_r270", (0.86, 0.60, 0.995, 0.98), 270, False),
         ("right_strip_precise_mirror_r90", (0.86, 0.60, 0.995, 0.98), 90, True),
         ("right_strip_precise_mirror_r270", (0.86, 0.60, 0.995, 0.98), 270, True),
+
+        ("right_card_strip", (0.80, 0.48, 0.995, 0.98), 0, False),
+        ("right_card_strip_r90", (0.80, 0.48, 0.995, 0.98), 90, False),
+        ("right_card_strip_r270", (0.80, 0.48, 0.995, 0.98), 270, False),
+        ("right_card_strip_mirror_r90", (0.80, 0.48, 0.995, 0.98), 90, True),
+        ("right_card_strip_mirror_r270", (0.80, 0.48, 0.995, 0.98), 270, True),
 
         ("right_strip_full", (0.82, 0.18, 0.995, 0.98), 0, False),
         ("right_strip_full_r90", (0.82, 0.18, 0.995, 0.98), 90, False),
