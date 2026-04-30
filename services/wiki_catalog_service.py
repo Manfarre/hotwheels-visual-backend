@@ -132,16 +132,22 @@ def build_wiki_queries(evidence: Dict[str, Any]) -> List[str]:
         queries.insert(0, "VOLKSWAGEN BEETLE")
 
     if "SHELBY" in token_set and "GT500" in token_set:
-        queries.insert(0, "67 SHELBY GT500")
-        queries.insert(1, "SHELBY GT500")
+        if "67" in token_set:
+            queries.insert(0, "67 SHELBY GT500")
+        queries.insert(0, "SHELBY GT500")
 
     if "BEACH" in token_set and "BOMB" in token_set and "TOO" in token_set:
         queries.insert(0, "BEACH BOMB TOO")
     elif "BEACH" in token_set and "BOMB" in token_set:
         queries.insert(0, "BEACH BOMB")
 
-    if "BATMAN" in token_set and "BATMOBILE" in token_set:
+    if "CLASSIC" in token_set and "TV" in token_set and "BATMOBILE" in token_set:
+        queries.insert(0, "CLASSIC TV SERIES BATMOBILE")
+
+    if "BATMAN" in token_set and "BEGINS" in token_set and "BATMOBILE" in token_set:
         queries.insert(0, "BATMAN BEGINS BATMOBILE")
+    elif "BATMAN" in token_set and "BATMOBILE" in token_set:
+        queries.insert(0, "BATMAN BATMOBILE")
     elif "BATMOBILE" in token_set:
         queries.insert(0, "BATMOBILE")
 

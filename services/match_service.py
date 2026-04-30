@@ -21,6 +21,7 @@ async def process_match(file) -> Dict[str, Any]:
             "ocrText": evidence.get("ocrText", ""),
             "ocrError": evidence.get("ocrError", ""),
             "cleanTokens": evidence.get("cleanTokens", []),
+            "modelLines": evidence.get("modelLines", []),
             "yearsDetected": evidence.get("yearsDetected", []),
             "imageInfo": evidence.get("imageInfo", {}),
             "visualSignals": evidence.get("visualSignals", {}),
@@ -28,7 +29,32 @@ async def process_match(file) -> Dict[str, Any]:
             "identityStatus": "no_match",
         }
 
+    quality = evidence.get("quality", {}) or {}
+    likely_insufficient = bool(quality.get("likelyInsufficient", False))
     candidates = build_candidates(evidence)
+
+    if likely_insufficient and not candidates:
+        return {
+            "success": False,
+            "topMatch": None,
+            "matches": [],
+            "message": "La imagen no contiene suficiente texto confiable para identificar la tarjeta.",
+            "acceptedMatch": False,
+            "queryUsed": "",
+            "queriesTried": [],
+            "ocrText": evidence.get("ocrText", ""),
+            "ocrError": evidence.get("ocrError", ""),
+            "cleanTokens": evidence.get("cleanTokens", []),
+            "modelLines": evidence.get("modelLines", []),
+            "yearsDetected": evidence.get("yearsDetected", []),
+            "imageInfo": evidence.get("imageInfo", {}),
+            "visualSignals": evidence.get("visualSignals", {}),
+            "candidates": [],
+            "identityStatus": "no_match",
+            "identitySource": "",
+            "quality": quality,
+        }
+
     identity = resolve_identity(evidence, candidates)
 
     identity_status = identity.get("identityStatus", "no_match")
@@ -83,10 +109,12 @@ async def process_match(file) -> Dict[str, Any]:
         "ocrText": evidence.get("ocrText", ""),
         "ocrError": evidence.get("ocrError", ""),
         "cleanTokens": evidence.get("cleanTokens", []),
+        "modelLines": evidence.get("modelLines", []),
         "yearsDetected": evidence.get("yearsDetected", []),
         "imageInfo": evidence.get("imageInfo", {}),
         "visualSignals": evidence.get("visualSignals", {}),
         "candidates": candidates,
         "identityStatus": identity_status,
         "identitySource": identity_source,
+        "quality": quality,
     }

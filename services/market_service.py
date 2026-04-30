@@ -12,7 +12,7 @@ def similarity(a: str, b: str) -> float:
 def build_market_queries(model_name: str) -> List[str]:
     phrase = normalize_text(model_name)
     if not phrase:
-        return ["hot wheels"]
+        return []
 
     queries: List[str] = [
         phrase,
@@ -60,6 +60,14 @@ def build_market_queries(model_name: str) -> List[str]:
             "BATMAN BATMOBILE",
         ])
 
+    elif phrase == "CLASSIC TV SERIES BATMOBILE":
+        queries.extend([
+            "BATMOBILE",
+            "CLASSIC TV SERIES BATMOBILE",
+            "hot wheels CLASSIC TV SERIES BATMOBILE",
+            "BATMAN CLASSIC TV SERIES BATMOBILE",
+        ])
+
     elif phrase == "BATMOBILE":
         queries.extend([
             "hot wheels BATMOBILE",
@@ -71,7 +79,6 @@ def build_market_queries(model_name: str) -> List[str]:
             "hot wheels CANDY STRIPER",
         ])
 
-    queries.append("hot wheels")
     return unique_keep_order([q for q in queries if q.strip()])
 
 
@@ -168,6 +175,7 @@ def choose_top_market_match(
         "condition": best_item.get("condition", ""),
         "similarity": round(similarity_value, 2),
         "score": best_score,
+        "sourceQuery": best_item.get("sourceQuery", ""),
     }
 
 
@@ -181,7 +189,10 @@ def run_market_search_round(queries: List[str], limit: int = 6) -> Dict[str, Any
 
         if result.get("success"):
             items = result.get("items", [])
-            all_items.extend(items)
+            for item in items:
+                enriched = dict(item)
+                enriched["sourceQuery"] = query
+                all_items.append(enriched)
 
         if len(all_items) >= 10:
             break
@@ -202,6 +213,15 @@ def run_market_search_round(queries: List[str], limit: int = 6) -> Dict[str, Any
 
 def fetch_market_data(model_name: str) -> Dict[str, Any]:
     queries = build_market_queries(model_name)
+    if not queries:
+        return {
+            "acceptedMatch": False,
+            "topMatch": None,
+            "matches": [],
+            "queryUsed": "",
+            "queriesTried": [],
+        }
+
     first_round = run_market_search_round(queries[:6], limit=6)
 
     items = first_round.get("items", [])
@@ -214,7 +234,7 @@ def fetch_market_data(model_name: str) -> Dict[str, Any]:
         candidate = choose_top_market_match(items, model_name)
         if candidate is not None:
             top_match = candidate
-            query_used = used_queries[0] if used_queries else query_used
+            query_used = candidate.get("sourceQuery", query_used)
 
     return {
         "acceptedMatch": top_match is not None,

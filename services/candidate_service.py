@@ -35,6 +35,24 @@ KNOWN_MODEL_PHRASES = [
     "TESLA",
 ]
 
+GENERIC_BRAND_ONLY_PHRASES = {
+    "CAMARO",
+    "MUSTANG",
+    "CHEVY",
+    "FORD",
+    "BEETLE",
+    "CORVETTE",
+    "COBRA",
+    "DODGE",
+    "CHARGER",
+    "CHALLENGER",
+    "PORSCHE",
+    "NISSAN",
+    "HONDA",
+    "TOYOTA",
+    "TESLA",
+}
+
 
 def infer_model_phrase_from_evidence(evidence: Dict[str, Any]) -> str:
     ocr_text = normalize_text(evidence.get("ocrText", ""))
@@ -47,6 +65,8 @@ def infer_model_phrase_from_evidence(evidence: Dict[str, Any]) -> str:
 
     for keyword in KNOWN_MODEL_PHRASES:
         if any(keyword in part for part in combined_texts):
+            if keyword in GENERIC_BRAND_ONLY_PHRASES:
+                continue
             return keyword
 
     for line in model_lines:
@@ -140,6 +160,9 @@ def has_minimum_candidate_confidence(evidence: Dict[str, Any], phrase: str) -> b
     if phrase_n == "BATMAN BEGINS":
         return "BATMAN" in token_set and "BEGINS" in token_set
 
+    if phrase_n in GENERIC_BRAND_ONLY_PHRASES:
+        return any(phrase_n in line for line in model_lines)
+
     return False
 
 
@@ -227,7 +250,7 @@ def build_local_fallback_candidates(evidence: Dict[str, Any]) -> List[Dict[str, 
     candidates: List[Dict[str, Any]] = []
 
     primary_phrase = infer_model_phrase_from_evidence(evidence)
-    if primary_phrase:
+    if primary_phrase and primary_phrase not in GENERIC_BRAND_ONLY_PHRASES:
         candidates.append(
             {
                 "name": primary_phrase,
