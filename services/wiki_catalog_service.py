@@ -135,7 +135,10 @@ def build_wiki_queries(evidence: Dict[str, Any]) -> List[str]:
     if "SANTA" in token_set and "JACK" in token_set:
         queries.insert(0, "SANTA JACK")
 
-    if "HARDNOZE" in token_set and "MERC" in token_set:
+    if "HARDNOZE" in token_set and "MERCURY" in token_set:
+        queries.insert(0, "HARDNOZE MERCURY")
+        queries.insert(1, "HARDNOZE MERC")
+    elif "HARDNOZE" in token_set and "MERC" in token_set:
         queries.insert(0, "HARDNOZE MERC")
 
     if "VOLKSWAGEN" in token_set and "BEETLE" in token_set:

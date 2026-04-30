@@ -18,6 +18,8 @@ KNOWN_MODEL_PHRASES = [
     "VOLKSWAGEN BEETLE",
     "BONE SHAKER",
     "DRAG BUS",
+    "HARDNOZE MERCURY",
+    "HARDNOZE MERC",
     "CAMARO",
     "MUSTANG",
     "CHEVY",
@@ -93,6 +95,9 @@ def infer_model_phrase_from_evidence(evidence: Dict[str, Any]) -> str:
         if "VOLKSWAGEN" in line and "BEETLE" in line:
             return "VOLKSWAGEN BEETLE"
 
+        if "HARDNOZE" in line and ("MERCURY" in line or "MERC" in line):
+            return "HARDNOZE MERCURY" if "MERCURY" in line else "HARDNOZE MERC"
+
     token_set = set(clean_tokens)
 
     if "SHELBY" in token_set and "GT500" in token_set:
@@ -112,6 +117,12 @@ def infer_model_phrase_from_evidence(evidence: Dict[str, Any]) -> str:
 
     if "VOLKSWAGEN" in token_set and "BEETLE" in token_set:
         return "VOLKSWAGEN BEETLE"
+
+    if "HARDNOZE" in token_set and "MERCURY" in token_set:
+        return "HARDNOZE MERCURY"
+
+    if "HARDNOZE" in token_set and "MERC" in token_set:
+        return "HARDNOZE MERC"
 
     return ""
 
@@ -159,6 +170,18 @@ def has_minimum_candidate_confidence(evidence: Dict[str, Any], phrase: str) -> b
 
     if phrase_n == "BATMAN BEGINS":
         return "BATMAN" in token_set and "BEGINS" in token_set
+
+    if phrase_n == "HARDNOZE MERCURY":
+        return (
+            ("HARDNOZE" in token_set and "MERCURY" in token_set) or
+            any("HARDNOZE MERCURY" in line for line in model_lines)
+        )
+
+    if phrase_n == "HARDNOZE MERC":
+        return (
+            ("HARDNOZE" in token_set and "MERC" in token_set) or
+            any("HARDNOZE MERC" in line for line in model_lines)
+        )
 
     if phrase_n in GENERIC_BRAND_ONLY_PHRASES:
         return any(phrase_n in line for line in model_lines)
@@ -241,6 +264,18 @@ def score_local_candidate(evidence: Dict[str, Any], phrase: str) -> float:
         if any("CANDY STRIPER" in line for line in model_lines):
             score += 5.0
         if "CANDY" in token_set and "STRIPER" in token_set:
+            score += 4.0
+
+    elif phrase_n == "HARDNOZE MERCURY":
+        if any("HARDNOZE MERCURY" in line for line in model_lines):
+            score += 5.0
+        if "HARDNOZE" in token_set and "MERCURY" in token_set:
+            score += 4.0
+
+    elif phrase_n == "HARDNOZE MERC":
+        if any("HARDNOZE MERC" in line for line in model_lines):
+            score += 5.0
+        if "HARDNOZE" in token_set and "MERC" in token_set:
             score += 4.0
 
     return round(score, 2)
